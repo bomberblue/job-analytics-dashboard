@@ -110,15 +110,10 @@ class DataCleaner:
         """
         print("🧹 Starting data cleaning...")
         df = df.copy()
-        
-        # Remove duplicates (if columns exist)
-        initial_rows = len(df)
-        if 'title' in df.columns and 'company' in df.columns:
-            df = df.drop_duplicates(subset=['title', 'company'])
-            print(f"  ✓ Removed {initial_rows - len(df)} duplicates")
-        else:
-            print(f"  ⓘ Skipped duplicate removal (title/company columns not found)")
-        
+
+        # Note: no dedup on (title, company) here — the same role is legitimately
+        # posted multiple times (reposts), so that pair does not identify a duplicate.
+
         # Clean salary data (handle both combined and separate columns)
         print("  → Parsing salaries...")
         if 'salary' in df.columns:

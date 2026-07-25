@@ -40,8 +40,13 @@ class DatabaseManager:
             df_raw['raw_id'] = [f"raw_{uuid.uuid4().hex[:12]}" for _ in range(len(df_raw))]
             df_raw['loaded_at'] = pd.Timestamp.now()
             
+            # Only keep columns that actually exist in raw_jobs_flat's schema — the
+            # incoming df may carry extra pipeline-only helper columns (e.g. a
+            # synthesized 'salary' field) that would otherwise cause every row to
+            # be rejected with a Binder Error.
+            table_columns = set(conn.execute("PRAGMA table_info('raw_jobs_flat')").df()['name'])
             preserve_columns = list(df.columns) + ['raw_id', 'loaded_at', 'raw_column_count', 'raw_null_count']
-            preserve_columns = [col for col in preserve_columns if col in df_raw.columns]
+            preserve_columns = [col for col in preserve_columns if col in df_raw.columns and col in table_columns]
             df_raw_insert = df_raw[preserve_columns].copy()
             
             conn.register('df_raw_insert', df_raw_insert)
