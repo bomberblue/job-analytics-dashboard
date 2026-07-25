@@ -24,7 +24,6 @@ DUCKDB_FILE = str(DB_FILE)
 
 # Data processing parameters
 SALARY_MIN_THRESHOLD = 1000  # SGD - filter out unrealistic salaries
-SALARY_MAX_THRESHOLD = 100000  # SGD - upper bound for salary data
 
 # Experience level categories
 EXPERIENCE_LEVELS = {

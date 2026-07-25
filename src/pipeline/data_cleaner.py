@@ -5,7 +5,7 @@ Handles missing values, data type conversions, standardization.
 import pandas as pd
 import re
 from datetime import datetime
-from config.settings import SALARY_MIN_THRESHOLD, SALARY_MAX_THRESHOLD
+from config.settings import SALARY_MIN_THRESHOLD
 
 
 class DataCleaner:
@@ -35,8 +35,8 @@ class DataCleaner:
                 min_sal = int(numbers[0])
                 max_sal = int(numbers[1])
                 
-                # Filter unrealistic salaries
-                if min_sal >= SALARY_MIN_THRESHOLD and max_sal <= SALARY_MAX_THRESHOLD:
+                # Filter unrealistically low salaries
+                if min_sal >= SALARY_MIN_THRESHOLD:
                     return min_sal, max_sal
             except:
                 pass
