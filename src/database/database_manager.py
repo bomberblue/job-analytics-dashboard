@@ -1,0 +1,340 @@
+"""
+Database manager for DuckDB operations.
+Handles connections, queries, data insertion (raw and processed layers).
+"""
+import duckdb
+import pandas as pd
+import json
+from config.settings import DUCKDB_FILE
+
+
+class DatabaseManager:
+    """Manager for DuckDB operations with raw and processed data layers."""
+    
+    def __init__(self):
+        self.db_path = DUCKDB_FILE
+    
+    def get_connection(self):
+        """Get a DuckDB connection."""
+        return duckdb.connect(self.db_path)
+    
+    def insert_raw_jobs(self, df: pd.DataFrame) -> int:
+        """
+        Insert raw job data into raw_jobs_flat table for audit trail.
+        Maintains lineage before any transformations.
+        
+        Args:
+            df: Raw DataFrame with original columns from CSV
+            
+        Returns:
+            Number of rows inserted
+        """
+        import uuid
+        conn = self.get_connection()
+        try:
+            df_raw = df.copy()
+            
+            # Preserve every incoming CSV column and add metadata columns for audit trail
+            df_raw['raw_column_count'] = len(df.columns)
+            df_raw['raw_null_count'] = df.isnull().sum(axis=1).astype(int)
+            df_raw['raw_id'] = [f"raw_{uuid.uuid4().hex[:12]}" for _ in range(len(df_raw))]
+            df_raw['loaded_at'] = pd.Timestamp.now()
+            
+            preserve_columns = list(df.columns) + ['raw_id', 'loaded_at', 'raw_column_count', 'raw_null_count']
+            preserve_columns = [col for col in preserve_columns if col in df_raw.columns]
+            df_raw_insert = df_raw[preserve_columns].copy()
+            
+            conn.register('df_raw_insert', df_raw_insert)
+            col_list = ', '.join(preserve_columns)
+            conn.execute(f"INSERT INTO raw_jobs_flat ({col_list}) SELECT {col_list} FROM df_raw_insert")
+            inserted = len(df_raw)
+            conn.close()
+            print(f"✓ Inserted {inserted} raw job records into raw_jobs_flat")
+            return inserted
+        except Exception as e:
+            print(f"✗ Error inserting raw jobs: {e}")
+            conn.close()
+            return 0
+    
+    def insert_jobs(self, df: pd.DataFrame) -> int:
+        """
+        Insert processed job data into the jobs table.
+        
+        Args:
+            df: DataFrame with columns matching jobs schema
+            
+        Returns:
+            Number of rows inserted
+        """
+        import uuid
+        conn = self.get_connection()
+        try:
+            df_insert = df.copy()
+            print(f"  📊 DataFrame shape before insert: {df_insert.shape}")
+            print(f"  📋 Available columns: {df_insert.columns.tolist()[:10]}...")
+            
+            # ALWAYS regenerate job_id with UUIDs (guarantees uniqueness)
+            df_insert['job_id'] = [f"job_{uuid.uuid4().hex[:12]}" for _ in range(len(df_insert))]
+            print(f"  ✓ Regenerated unique job_ids (sample: {df_insert['job_id'].iloc[0]})")
+            
+            if 'created_at' not in df_insert.columns:
+                df_insert['created_at'] = pd.Timestamp.now()
+            
+            if 'salary_currency' not in df_insert.columns:
+                df_insert['salary_currency'] = 'SGD'
+            
+            if 'sub_sector' not in df_insert.columns:
+                df_insert['sub_sector'] = 'General'
+            
+            if 'seniority_years' not in df_insert.columns:
+                df_insert['seniority_years'] = 0
+            
+            # Define the columns needed for the jobs table
+            columns_order = ['job_id', 'title', 'company', 'sector', 'sub_sector', 'location', 
+                           'salary_min', 'salary_max', 'salary_currency', 'experience_level',
+                           'seniority_years', 'posting_date', 'skills', 
+                           'description', 'created_at']
+            
+            # Filter to available columns only
+            available_cols = [col for col in columns_order if col in df_insert.columns]
+            print(f"  ✓ Columns to insert: {len(available_cols)} of {len(columns_order)}")
+            
+            if not available_cols:
+                print("  ✗ No columns available for insertion!")
+                return 0
+            
+            df_to_insert = df_insert[available_cols].copy()
+            
+            # Create column list for INSERT statement
+            col_list = ', '.join(available_cols)
+            conn.execute(f"INSERT INTO jobs ({col_list}) SELECT {col_list} FROM df_to_insert")
+            inserted = len(df_insert)
+            conn.close()
+            print(f"✓ Inserted {inserted} job records")
+            return inserted
+        except Exception as e:
+            print(f"✗ Error inserting jobs: {e}")
+            print(f"  DataFrame columns: {df_insert.columns.tolist() if 'df_insert' in locals() else 'N/A'}")
+            conn.close()
+            return 0
+    
+    def query(self, sql: str) -> pd.DataFrame:
+        """Execute SQL query and return results as DataFrame."""
+        conn = self.get_connection()
+        result = conn.execute(sql).df()
+        conn.close()
+        return result
+    
+    def get_hirer_view(self, sector: str = None) -> dict:
+        """
+        Get metrics for hirer view.
+        Focused on: demand, hiring trends, required skills.
+        """
+        conn = self.get_connection()
+        
+        filters = ""
+        if sector:
+            filters = f"WHERE sector = '{sector}'"
+        
+        metrics = {
+            "market_overview": conn.execute(f"""
+                SELECT 
+                    COUNT(*) as total_postings,
+                    COUNT(DISTINCT company) as num_companies,
+                    COUNT(DISTINCT title) as unique_roles,
+                    AVG(salary_max) as avg_salary
+                FROM jobs
+                {filters}
+            """).df(),
+            
+            "top_roles": conn.execute(f"""
+                SELECT 
+                    title,
+                    COUNT(*) as postings,
+                    AVG(salary_max) as avg_salary,
+                    COUNT(DISTINCT company) as companies
+                FROM jobs
+                {filters}
+                GROUP BY title
+                ORDER BY postings DESC
+                LIMIT 10
+            """).df(),
+            
+            "skills_in_demand": conn.execute(f"""
+                SELECT 
+                    skill,
+                    COUNT(*) as demand_count,
+                    AVG(salary_max) as avg_salary
+                FROM (
+                    SELECT UNNEST(string_split(skills, ',')) as skill
+                    FROM jobs
+                    {filters}
+                )
+                GROUP BY skill
+                ORDER BY demand_count DESC
+                LIMIT 15
+            """).df(),
+            
+            "hiring_trends": conn.execute(f"""
+                SELECT 
+                    posting_date,
+                    COUNT(*) as postings,
+                    AVG(salary_max) as avg_salary
+                FROM jobs
+                {filters}
+                GROUP BY posting_date
+                ORDER BY posting_date DESC
+                LIMIT 30
+            """).df(),
+        }
+        
+        conn.close()
+        return metrics
+    
+    def get_seeker_view(self, experience_level: str = None, sector: str = None) -> dict:
+        """
+        Get metrics for job seeker view.
+        Focused on: opportunities, benchmarks, market competition.
+        """
+        conn = self.get_connection()
+        
+        filters = "WHERE 1=1"
+        if experience_level:
+            filters += f" AND experience_level = '{experience_level}'"
+        if sector:
+            filters += f" AND sector = '{sector}'"
+        
+        metrics = {
+            "opportunities": conn.execute(f"""
+                SELECT 
+                    COUNT(*) as total_opportunities,
+                    COUNT(DISTINCT sector) as sectors_hiring,
+                    AVG(salary_max) as median_salary,
+                    MAX(salary_max) as top_salary
+                FROM jobs
+                {filters}
+            """).df(),
+            
+            "top_roles": conn.execute(f"""
+                SELECT 
+                    title,
+                    COUNT(*) as opportunities,
+                    AVG(salary_max) as avg_salary,
+                    MIN(salary_min) as min_salary,
+                    COUNT(DISTINCT company) as num_companies
+                FROM jobs
+                {filters}
+                GROUP BY title
+                ORDER BY opportunities DESC
+                LIMIT 10
+            """).df(),
+            
+            "salary_benchmarks": conn.execute(f"""
+                SELECT 
+                    title,
+                    experience_level,
+                    MIN(salary_min) as p25,
+                    AVG(salary_min) as median_entry,
+                    AVG(salary_max) as median_max,
+                    MAX(salary_max) as p90
+                FROM jobs
+                {filters}
+                GROUP BY title, experience_level
+                ORDER BY median_max DESC
+                LIMIT 10
+            """).df(),
+            
+            "competitive_skills": conn.execute(f"""
+                SELECT 
+                    skill,
+                    COUNT(*) as opportunities,
+                    AVG(salary_max) as salary_premium
+                FROM (
+                    SELECT UNNEST(string_split(skills, ',')) as skill, salary_max
+                    FROM jobs
+                    {filters}
+                )
+                GROUP BY skill
+                HAVING COUNT(*) > 10
+                ORDER BY salary_premium DESC
+                LIMIT 15
+            """).df(),
+        }
+        
+        conn.close()
+        return metrics
+    
+    def get_sector_list(self) -> list:
+        """Get list of available sectors."""
+        df = self.query("SELECT DISTINCT sector FROM jobs WHERE sector IS NOT NULL ORDER BY sector")
+        return df['sector'].tolist()
+    
+    def get_role_list(self, sector: str = None) -> list:
+        """Get list of roles, optionally filtered by sector."""
+        sql = "SELECT DISTINCT title FROM jobs"
+        if sector:
+            sql += f" WHERE sector = '{sector}'"
+        sql += " ORDER BY title"
+        df = self.query(sql)
+        return df['title'].tolist()
+    
+    # ========================================================================
+    # RAW DATA LAYER QUERIES (Audit & Data Quality)
+    # ========================================================================
+    
+    def get_raw_data_quality_report(self) -> pd.DataFrame:
+        """Get data quality summary from raw data layer."""
+        sql = """
+        SELECT 
+            COUNT(*) as total_raw_records,
+            COUNT(DISTINCT raw_id) as unique_raw_ids,
+            AVG(raw_column_count) as avg_columns,
+            AVG(raw_null_count) as avg_nulls_per_record,
+            MIN(raw_null_count) as min_nulls,
+            MAX(raw_null_count) as max_nulls,
+            COUNT(CASE WHEN raw_null_count > 5 THEN 1 END) as records_with_many_nulls
+        FROM raw_jobs_flat
+        """
+        return self.query(sql)
+    
+    def get_raw_sample(self, limit: int = 10) -> pd.DataFrame:
+        """Get sample of raw data for inspection."""
+        return self.query(f"SELECT * FROM raw_jobs_flat LIMIT {limit}")
+    
+    def compare_raw_vs_processed(self) -> dict:
+        """Compare raw and processed data layers."""
+        comparison = {
+            'raw_count': self.query("SELECT COUNT(*) as count FROM raw_jobs_flat").iloc[0]['count'],
+            'processed_count': self.query("SELECT COUNT(*) as count FROM jobs").iloc[0]['count'],
+            'records_lost_in_cleaning': 0,
+            'records_enriched': 0
+        }
+        
+        comparison['records_lost_in_cleaning'] = comparison['raw_count'] - comparison['processed_count']
+        comparison['cleaning_retention_rate'] = f"{(comparison['processed_count'] / comparison['raw_count'] * 100):.1f}%"
+        
+        return comparison
+    
+    def audit_data_lineage(self, raw_id: str) -> dict:
+        """Trace a single record from raw to processed layer."""
+        raw_record = self.query(f"SELECT * FROM raw_jobs_flat WHERE raw_id = '{raw_id}'")
+        
+        if raw_record.empty:
+            return {'status': 'not_found', 'raw_id': raw_id}
+        
+        # Find corresponding processed record
+        company = raw_record.iloc[0].get('company', '')
+        title = raw_record.iloc[0].get('title', '')
+        
+        processed_records = self.query(f"""
+            SELECT * FROM jobs 
+            WHERE company = '{company}' AND title = '{title}'
+            LIMIT 1
+        """)
+        
+        return {
+            'raw_id': raw_id,
+            'raw_data': raw_record.to_dict('records')[0] if not raw_record.empty else None,
+            'processed_data': processed_records.to_dict('records')[0] if not processed_records.empty else None,
+            'transformation_status': 'found' if not processed_records.empty else 'lost_in_processing'
+        }
