@@ -1,0 +1,14 @@
+name: job-analytics
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - duckdb
+  - pip
+  - pip:
+    - streamlit>=1.28.0
+    - plotly>=5.17.0
+    - pyarrow>=13.0.0
