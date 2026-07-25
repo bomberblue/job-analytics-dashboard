@@ -74,13 +74,15 @@ class DataCleaner:
         ]
         
         text = str(job_desc) + " " + str(job_title)
-        text_lower = text.lower()
-        
+
         found_skills = []
         for skill in common_skills:
-            if skill.lower() in text_lower:
+            # Match on alphanumeric boundaries (not \b) so skills containing
+            # symbols like "C++", "CI/CD", "Node.js" still match correctly.
+            pattern = r'(?<![a-zA-Z0-9])' + re.escape(skill) + r'(?![a-zA-Z0-9])'
+            if re.search(pattern, text, re.IGNORECASE):
                 found_skills.append(skill)
-        
+
         return ", ".join(found_skills) if found_skills else "Not Specified"
     
     @staticmethod

@@ -2,14 +2,15 @@
 Main Streamlit dashboard application.
 Entry point for the job analytics dashboard.
 """
-import streamlit as st
-import pandas as pd
-from config.settings import STREAMLIT_CONFIG
-from src.database.database_manager import DatabaseManager
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+import streamlit as st
+import pandas as pd
+from config.settings import STREAMLIT_CONFIG
+from src.database.database_manager import DatabaseManager
 
 
 # Configure page
@@ -98,33 +99,64 @@ def render_hirer_view():
                 st.write(f"Avg Salary: ${int(row['avg_salary']):,}" if pd.notna(row['avg_salary']) else "N/A")
                 st.write(f"Companies: {int(row['companies'])}")
     
-    # Skills in demand
-    st.subheader("Skills in Demand")
-    if not metrics['skills_in_demand'].empty:
-        skills_data = metrics['skills_in_demand'].head(10)
-        
+    # Roles in demand
+    st.subheader("Roles in Demand")
+    if not metrics['top_roles'].empty:
+        roles_data = metrics['top_roles'].head(10)
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
             st.bar_chart(
-                skills_data.set_index('skill')['demand_count'],
+                roles_data.set_index('title')['postings'],
                 use_container_width=True
             )
-        
+
         with col2:
-            st.write("**Skill Premium (Salary Impact)**")
-            skills_data_sorted = skills_data.sort_values('avg_salary', ascending=False)
-            for _, row in skills_data_sorted.head(5).iterrows():
-                st.write(f"{row['skill']}: ${int(row['avg_salary']):,}")
-    
-    # Hiring trends
-    st.subheader("Hiring Trends (Last 30 Days)")
-    if not metrics['hiring_trends'].empty:
-        trend_data = metrics['hiring_trends'].sort_values('posting_date')
-        st.line_chart(
-            trend_data.set_index('posting_date')['postings'],
-            use_container_width=True
+            st.write("**Top Paying Roles**")
+            roles_data_sorted = roles_data.sort_values('avg_salary', ascending=False)
+            for _, row in roles_data_sorted.head(5).iterrows():
+                st.write(f"{row['title']}: ${int(row['avg_salary']):,}" if pd.notna(row['avg_salary']) else f"{row['title']}: N/A")
+
+    # Hiring trends (year -> month drill-down)
+    st.subheader("Hiring Trends")
+
+    if st.session_state.get('trend_sector') != sector:
+        st.session_state.trend_sector = sector
+        st.session_state.trend_year = None
+
+    if st.session_state.get('trend_year') is None:
+        yearly_trends = st.session_state.db.get_hiring_trends(sector=sector, granularity='year')
+        if not yearly_trends.empty:
+            st.caption("Postings by year — select a year to drill into monthly detail")
+            st.bar_chart(
+                yearly_trends.set_index('period')['postings'],
+                use_container_width=True
+            )
+            years = yearly_trends['period'].tolist()
+            selected_year = st.selectbox(
+                "Drill down into a year:",
+                ["Select a year..."] + [str(y) for y in years],
+                key="hirer_trend_year_select"
+            )
+            if selected_year != "Select a year...":
+                st.session_state.trend_year = int(selected_year)
+                st.rerun()
+    else:
+        if st.button("⬅ Back to yearly view"):
+            st.session_state.trend_year = None
+            st.rerun()
+        monthly_trends = st.session_state.db.get_hiring_trends(
+            sector=sector, granularity='month', year=st.session_state.trend_year
         )
+        if not monthly_trends.empty:
+            st.caption(f"Postings by month — {st.session_state.trend_year}")
+            st.bar_chart(
+                monthly_trends.set_index('period')['postings'],
+                use_container_width=True
+            )
+        else:
+            st.info("No data for this year.")
 
 
 def render_seeker_view():
@@ -197,11 +229,11 @@ def render_seeker_view():
         )
     
     # Competitive skills
-    st.subheader("High-Value Skills (Salary Premium)")
+    st.subheader("High-Value Skills (Avg Salary)")
     if not metrics['competitive_skills'].empty:
         skills_chart = metrics['competitive_skills'].head(10)
         st.bar_chart(
-            skills_chart.set_index('skill')['salary_premium'],
+            skills_chart.set_index('skill')['avg_salary'],
             use_container_width=True
         )
 
@@ -227,7 +259,7 @@ def main():
     **About this Dashboard**
     
     This analytics dashboard provides insights into Singapore's job market. 
-    - **Hirers** can identify market trends, top roles, and in-demand skills
+    - **Hirers** can identify market trends and top roles
     - **Job Seekers** can benchmark salaries, find opportunities, and understand market competitiveness
     """)
 

@@ -142,16 +142,16 @@ class DatabaseManager:
                     COUNT(*) as total_postings,
                     COUNT(DISTINCT company) as num_companies,
                     COUNT(DISTINCT title) as unique_roles,
-                    AVG(salary_max) as avg_salary
+                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
                 FROM jobs
                 {filters}
             """).df(),
-            
+
             "top_roles": conn.execute(f"""
-                SELECT 
+                SELECT
                     title,
                     COUNT(*) as postings,
-                    AVG(salary_max) as avg_salary,
+                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary,
                     COUNT(DISTINCT company) as companies
                 FROM jobs
                 {filters}
@@ -161,12 +161,12 @@ class DatabaseManager:
             """).df(),
             
             "skills_in_demand": conn.execute(f"""
-                SELECT 
+                SELECT
                     skill,
                     COUNT(*) as demand_count,
-                    AVG(salary_max) as avg_salary
+                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
                 FROM (
-                    SELECT UNNEST(string_split(skills, ',')) as skill
+                    SELECT TRIM(UNNEST(string_split(skills, ','))) as skill, salary_min, salary_max
                     FROM jobs
                     {filters}
                 )
@@ -174,23 +174,44 @@ class DatabaseManager:
                 ORDER BY demand_count DESC
                 LIMIT 15
             """).df(),
-            
-            "hiring_trends": conn.execute(f"""
-                SELECT 
-                    posting_date,
-                    COUNT(*) as postings,
-                    AVG(salary_max) as avg_salary
-                FROM jobs
-                {filters}
-                GROUP BY posting_date
-                ORDER BY posting_date DESC
-                LIMIT 30
-            """).df(),
         }
-        
+
         conn.close()
         return metrics
-    
+
+    def get_hiring_trends(self, sector: str = None, granularity: str = 'year', year: int = None) -> pd.DataFrame:
+        """
+        Get hiring trend counts aggregated by year or month, for drill-down.
+
+        Args:
+            sector: optional sector filter
+            granularity: 'year' or 'month'
+            year: when granularity='month', restrict to this year
+        """
+        conditions = ["posting_date IS NOT NULL"]
+        if sector:
+            conditions.append(f"sector = '{sector}'")
+        if granularity == 'month' and year is not None:
+            conditions.append(f"EXTRACT(YEAR FROM posting_date) = {int(year)}")
+        where_clause = "WHERE " + " AND ".join(conditions)
+
+        if granularity == 'year':
+            period_expr = "EXTRACT(YEAR FROM posting_date)::INTEGER"
+        else:
+            period_expr = "strftime(posting_date, '%Y-%m')"
+
+        sql = f"""
+            SELECT
+                {period_expr} as period,
+                COUNT(*) as postings,
+                SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
+            FROM jobs
+            {where_clause}
+            GROUP BY period
+            ORDER BY period
+        """
+        return self.query(sql)
+
     def get_seeker_view(self, experience_level: str = None, sector: str = None) -> dict:
         """
         Get metrics for job seeker view.
@@ -209,17 +230,17 @@ class DatabaseManager:
                 SELECT 
                     COUNT(*) as total_opportunities,
                     COUNT(DISTINCT sector) as sectors_hiring,
-                    AVG(salary_max) as median_salary,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (salary_min + salary_max) / 2) as median_salary,
                     MAX(salary_max) as top_salary
                 FROM jobs
                 {filters}
             """).df(),
-            
+
             "top_roles": conn.execute(f"""
-                SELECT 
+                SELECT
                     title,
                     COUNT(*) as opportunities,
-                    AVG(salary_max) as avg_salary,
+                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary,
                     MIN(salary_min) as min_salary,
                     COUNT(DISTINCT company) as num_companies
                 FROM jobs
@@ -245,18 +266,18 @@ class DatabaseManager:
             """).df(),
             
             "competitive_skills": conn.execute(f"""
-                SELECT 
+                SELECT
                     skill,
                     COUNT(*) as opportunities,
-                    AVG(salary_max) as salary_premium
+                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
                 FROM (
-                    SELECT UNNEST(string_split(skills, ',')) as skill, salary_max
+                    SELECT TRIM(UNNEST(string_split(skills, ','))) as skill, salary_min, salary_max
                     FROM jobs
                     {filters}
                 )
                 GROUP BY skill
                 HAVING COUNT(*) > 10
-                ORDER BY salary_premium DESC
+                ORDER BY avg_salary DESC
                 LIMIT 15
             """).df(),
         }
