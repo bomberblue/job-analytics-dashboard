@@ -109,8 +109,15 @@ class FeatureEngineer:
             axis=1
         )
         
-        # Experience features
-        df['seniority_years'] = df['experience_level'].apply(self.extract_seniority_years)
+        # Experience features. Prefer the numeric years straight from the source;
+        # deriving them from the experience_level label loses all resolution.
+        if 'min_years_experience' in df.columns:
+            df['seniority_years'] = (
+                pd.to_numeric(df['min_years_experience'], errors='coerce')
+                .fillna(0).astype(int)
+            )
+        else:
+            df['seniority_years'] = df['experience_level'].apply(self.extract_seniority_years)
         
         # Skills features
         df['skill_count'] = df['skills'].apply(self.get_skill_count)

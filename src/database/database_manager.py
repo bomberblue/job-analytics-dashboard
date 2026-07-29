@@ -6,6 +6,7 @@ import duckdb
 import pandas as pd
 import json
 from config.settings import DUCKDB_FILE
+from src.database.schema import JOBS_SCHEMA
 
 
 class DatabaseManager:
@@ -95,21 +96,36 @@ class DatabaseManager:
                 df_insert['seniority_years'] = 0
             
             # Define the columns needed for the jobs table
-            columns_order = ['job_id', 'title', 'company', 'sector', 'sub_sector', 'location', 
+            columns_order = ['job_id', 'title', 'company', 'sector', 'sub_sector', 'location',
                            'salary_min', 'salary_max', 'salary_currency', 'experience_level',
-                           'seniority_years', 'posting_date', 'skills', 
-                           'description', 'created_at']
-            
+                           'seniority_years', 'position_level', 'job_type', 'posting_date',
+                           'expiry_date', 'views', 'applications', 'vacancies', 'repost_count',
+                           'skills', 'description', 'created_at']
+
             # Filter to available columns only
             available_cols = [col for col in columns_order if col in df_insert.columns]
             print(f"  ✓ Columns to insert: {len(available_cols)} of {len(columns_order)}")
-            
+
+            # Name what went missing. A column quietly absent here lands in the
+            # table as all-NULL with no other warning, which is how views,
+            # applications and job_type were lost.
+            missing = [col for col in columns_order if col not in df_insert.columns]
+            if missing:
+                print(f"  ⚠ Not in DataFrame, will be NULL: {', '.join(missing)}")
+
             if not available_cols:
                 print("  ✗ No columns available for insertion!")
                 return 0
-            
+
             df_to_insert = df_insert[available_cols].copy()
-            
+
+            # Replace the table instead of appending. The pipeline always reloads
+            # from scratch, and appending made every re-run add a second copy of
+            # every posting. Done here rather than in initialize_database() so a
+            # failed extract can't leave an empty table behind.
+            conn.execute("DROP TABLE IF EXISTS jobs")
+            conn.execute(JOBS_SCHEMA)
+
             # Create column list for INSERT statement
             col_list = ', '.join(available_cols)
             conn.execute(f"INSERT INTO jobs ({col_list}) SELECT {col_list} FROM df_to_insert")
@@ -175,6 +191,7 @@ class DatabaseManager:
                     FROM jobs
                     {filters}
                 )
+                WHERE skill NOT IN ('Not Specified', '')
                 GROUP BY skill
                 ORDER BY demand_count DESC
                 LIMIT 15
@@ -280,6 +297,7 @@ class DatabaseManager:
                     FROM jobs
                     {filters}
                 )
+                WHERE skill NOT IN ('Not Specified', '')
                 GROUP BY skill
                 HAVING COUNT(*) > 10
                 ORDER BY avg_salary DESC
