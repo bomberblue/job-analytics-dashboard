@@ -44,13 +44,27 @@ class DataCleaner:
         return None, None
     
     @staticmethod
-    def standardize_experience_level(exp_text):
-        """Categorize experience level from text."""
-        if pd.isna(exp_text):
+    def standardize_experience_level(exp_value):
+        """
+        Categorize experience level.
+
+        The source column is minimumYearsExperience, a number, so this bands the
+        years directly. Text is still handled for other data sources.
+        """
+        if pd.isna(exp_value):
             return "Unknown"
-        
-        exp_text = str(exp_text).lower()
-        
+
+        years = pd.to_numeric(exp_value, errors='coerce')
+        if pd.notna(years):
+            if years <= 1:
+                return "Entry Level"
+            elif years <= 4:
+                return "Mid Level"
+            else:
+                return "Senior"
+
+        exp_text = str(exp_value).lower()
+
         if any(word in exp_text for word in ["junior", "graduate", "fresher", "entry", "intern"]):
             return "Entry Level"
         elif any(word in exp_text for word in ["mid", "senior", "lead", "specialist"]):

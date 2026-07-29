@@ -63,8 +63,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     salary_currency VARCHAR,
     experience_level VARCHAR,  -- 'entry', 'mid', 'senior'
     seniority_years INTEGER,
+    position_level VARCHAR,    -- source seniority label, e.g. 'Fresh/entry level'
     job_type VARCHAR,  -- 'Full-time', 'Part-time', 'Contract', etc.
     posting_date DATE,
+    expiry_date DATE,
+    views INTEGER,         -- how many people viewed the posting
+    applications INTEGER,  -- how many people applied
+    vacancies INTEGER,     -- openings on this one posting
+    repost_count INTEGER,
     skills TEXT,  -- comma-separated skills
     description TEXT,
     requirements TEXT,
@@ -142,7 +148,10 @@ def initialize_database():
     conn.execute(RAW_JOBS_SCHEMA)
     conn.execute(RAW_JOBS_FLAT_SCHEMA)
     
-    # Create processed tables (denormalized for analytics)
+    # Create processed tables (denormalized for analytics).
+    # jobs is deliberately NOT dropped here. It is dropped and recreated in
+    # insert_jobs(), at the point where there is actual data to replace it with,
+    # so a failed extract or a --nrows test run can't wipe a good load.
     print("📊 Creating processed/analytical tables...")
     conn.execute(JOBS_SCHEMA)
     conn.execute(ROLE_STATISTICS_SCHEMA)
