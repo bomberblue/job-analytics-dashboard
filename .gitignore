@@ -1,6 +1,5 @@
-data/raw/
-data/processed/
+data/processed/jobs.duckdb
+data/raw/SGJobData.csv
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-
