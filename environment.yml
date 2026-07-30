@@ -7,6 +7,8 @@ dependencies:
   - pandas
   - numpy
   - duckdb
+  - matplotlib
+  - seaborn
   - pip
   - pip:
     - streamlit>=1.28.0
