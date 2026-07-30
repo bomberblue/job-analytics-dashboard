@@ -315,14 +315,16 @@ def render_seasonality(db, sector=None, position_level=None):
     )
 
 
-def main():
-    """Render the full Market Overview board."""
-    initialize_session()
-    db = st.session_state.db
-
-    st.title("Market Overview")
+def render_market_overview_view():
+    """
+    Render the board's own header, filters, and all five sections. Composable
+    entry point for a shell that already has session state set up (e.g.
+    app.py) — matches render_hirer_view()/render_seeker_view()'s
+    zero-argument calling convention and self-contained header style.
+    """
+    st.header("📊 Market Overview")
     st.caption("What's happening in the Singapore job market")
-
+    db = st.session_state.db
     sector, position_level = render_filters(db)
     st.divider()
 
@@ -335,6 +337,12 @@ def main():
     render_category_rankings(db, sector, position_level)
     st.divider()
     render_seasonality(db, sector, position_level)
+
+
+def main():
+    """Render the full Market Overview board, standalone."""
+    initialize_session()
+    render_market_overview_view()
 
 
 if __name__ == "__main__":
