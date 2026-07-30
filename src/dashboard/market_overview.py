@@ -278,7 +278,11 @@ def fetch_seasonality(db, sector=None, position_level=None):
         ORDER BY month_num
     """
     df = db.query(sql)
-    df['month_name'] = df['month_num'].apply(lambda n: _MONTH_NAMES[n])
+    df['month_name'] = pd.Categorical(
+        df['month_num'].apply(lambda n: _MONTH_NAMES[n]),
+        categories=_MONTH_NAMES[1:],
+        ordered=True
+    )
     return df[['month_num', 'month_name', 'avg_postings', 'years_included', 'total_postings']]
 
 
