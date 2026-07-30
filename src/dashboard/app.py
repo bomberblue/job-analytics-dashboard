@@ -13,9 +13,6 @@ from config.settings import STREAMLIT_CONFIG
 from src.database.database_manager import DatabaseManager
 
 
-# Configure page
-st.set_page_config(**STREAMLIT_CONFIG)
-
 # Custom CSS
 st.markdown("""
 <style>
@@ -265,4 +262,5 @@ def main():
 
 
 if __name__ == "__main__":
+    st.set_page_config(**STREAMLIT_CONFIG)
     main()
