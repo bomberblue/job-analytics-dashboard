@@ -181,6 +181,32 @@ def render_industry_momentum(db, sector=None, position_level=None):
     )
 
 
+def fetch_salary_trend(db, sector=None, position_level=None):
+    """Return median pay by month: columns month ('YYYY-MM'), median_pay."""
+    where = build_where_clause(sector, position_level)
+    sql = f"""
+        SELECT
+            strftime(posting_date, '%Y-%m') AS month,
+            ROUND(MEDIAN((salary_min + salary_max) / 2.0)) AS median_pay
+        FROM jobs
+        {where}
+        GROUP BY month
+        ORDER BY month
+    """
+    return db.query(sql)
+
+
+def render_salary_trend(db, sector=None, position_level=None):
+    """Render the salary trend line chart."""
+    df = fetch_salary_trend(db, sector, position_level)
+    st.subheader("Salary Trend")
+    if df.empty:
+        st.info("No postings match the current filters.")
+        return
+    st.caption(f"Median pay by month, {df['month'].iloc[0]} - {df['month'].iloc[-1]}")
+    st.line_chart(df.set_index('month')['median_pay'], use_container_width=True)
+
+
 def main():
     """Render the full Market Overview board."""
     initialize_session()

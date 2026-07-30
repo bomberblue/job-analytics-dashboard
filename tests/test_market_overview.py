@@ -3,7 +3,7 @@ Unit tests for the Market Overview board.
 """
 import unittest
 from src.database.database_manager import DatabaseManager
-from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking, fetch_industry_momentum
+from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking, fetch_industry_momentum, fetch_salary_trend
 
 
 class TestBuildWhereClause(unittest.TestCase):
@@ -85,6 +85,18 @@ class TestFetchIndustryMomentum(unittest.TestCase):
         df = fetch_industry_momentum(self.db)
         self.assertTrue((df['recent_month_count'] <= 3).all())
         self.assertTrue((df['prior_month_count'] <= 3).all())
+
+
+class TestFetchSalaryTrend(unittest.TestCase):
+    def setUp(self):
+        self.db = DatabaseManager()
+
+    def test_unfiltered_shape_and_order(self):
+        df = fetch_salary_trend(self.db)
+        self.assertEqual(list(df.columns), ['month', 'median_pay'])
+        self.assertGreater(len(df), 0)
+        months = df['month'].tolist()
+        self.assertEqual(months, sorted(months))
 
 
 if __name__ == '__main__':
