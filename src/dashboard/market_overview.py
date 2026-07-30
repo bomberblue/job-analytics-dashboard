@@ -153,14 +153,20 @@ def fetch_industry_momentum(db, sector=None, position_level=None):
         GROUP BY m.sector
     """
     df = db.query(sql)
-
-    def pct_change(row):
-        if pd.isna(row['prior_avg_monthly']) or row['prior_avg_monthly'] == 0:
-            return None
-        return round(100 * (row['recent_avg_monthly'] - row['prior_avg_monthly']) / row['prior_avg_monthly'], 1)
-
-    df['pct_change'] = df.apply(pct_change, axis=1)
+    df['pct_change'] = df.apply(compute_pct_change, axis=1)
     return df.sort_values('pct_change', ascending=False, na_position='last').reset_index(drop=True)
+
+
+def compute_pct_change(row):
+    """
+    Percent change from prior_avg_monthly to recent_avg_monthly for one row of
+    fetch_industry_momentum's output. None when prior_avg_monthly is 0 or missing
+    (can't compute a percent change off a zero or absent base), including when
+    recent_avg_monthly is also missing.
+    """
+    if pd.isna(row['prior_avg_monthly']) or row['prior_avg_monthly'] == 0:
+        return None
+    return round(100 * (row['recent_avg_monthly'] - row['prior_avg_monthly']) / row['prior_avg_monthly'], 1)
 
 
 def render_industry_momentum(db, sector=None, position_level=None):
@@ -232,12 +238,20 @@ def render_category_rankings(db, sector=None, position_level=None):
         if industries.empty:
             st.info("No postings match the current filters.")
         else:
+            # industries is already ORDER BY postings DESC; pin that as the
+            # chart's category order, or Vega-Lite defaults to alphabetical.
+            industries['sector'] = pd.Categorical(
+                industries['sector'], categories=industries['sector'], ordered=True
+            )
             st.bar_chart(industries.set_index('sector')['postings'], use_container_width=True)
     with col2:
         st.caption("By position level")
         if levels.empty:
             st.info("No postings match the current filters.")
         else:
+            levels['position_level'] = pd.Categorical(
+                levels['position_level'], categories=levels['position_level'], ordered=True
+            )
             st.bar_chart(levels.set_index('position_level')['postings'], use_container_width=True)
 
 

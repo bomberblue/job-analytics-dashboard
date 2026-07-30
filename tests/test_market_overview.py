@@ -2,8 +2,9 @@
 Unit tests for the Market Overview board.
 """
 import unittest
+import pandas as pd
 from src.database.database_manager import DatabaseManager
-from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking, fetch_industry_momentum, fetch_salary_trend, fetch_position_level_ranking, fetch_seasonality
+from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking, fetch_industry_momentum, fetch_salary_trend, fetch_position_level_ranking, fetch_seasonality, compute_pct_change
 
 
 class TestBuildWhereClause(unittest.TestCase):
@@ -49,6 +50,11 @@ class TestFetchHeadlineMetrics(unittest.TestCase):
         self.assertLessEqual(df.iloc[0]['total_postings'], 1026079)
         self.assertGreater(df.iloc[0]['median_pay'], 0)
 
+    def test_sector_filter_reduces_total(self):
+        unfiltered_total = fetch_headline_metrics(self.db).iloc[0]['total_postings']
+        filtered_total = fetch_headline_metrics(self.db, sector="Information Technology").iloc[0]['total_postings']
+        self.assertLess(filtered_total, unfiltered_total)
+
 
 class TestFetchIndustryRanking(unittest.TestCase):
     def setUp(self):
@@ -66,6 +72,11 @@ class TestFetchIndustryRanking(unittest.TestCase):
     def test_unfiltered_returns_all_43_sectors(self):
         df = fetch_industry_ranking(self.db)
         self.assertEqual(len(df), 43)
+
+    def test_sector_filter_returns_one_row(self):
+        df = fetch_industry_ranking(self.db, sector="Information Technology")
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]['sector'], "Information Technology")
 
 
 class TestFetchIndustryMomentum(unittest.TestCase):
@@ -85,6 +96,36 @@ class TestFetchIndustryMomentum(unittest.TestCase):
         df = fetch_industry_momentum(self.db)
         self.assertTrue((df['recent_month_count'] <= 3).all())
         self.assertTrue((df['prior_month_count'] <= 3).all())
+
+
+class TestComputePctChange(unittest.TestCase):
+    """
+    Pins down compute_pct_change's null-handling, which the DB-backed tests above
+    can't reach: the current dataset has no sector with a zero-postings window, so
+    these edge cases only show up in a synthetic row shaped like one from
+    fetch_industry_momentum.
+    """
+
+    def test_normal_case(self):
+        row = pd.Series({'recent_avg_monthly': 120.0, 'prior_avg_monthly': 100.0})
+        self.assertEqual(compute_pct_change(row), 20.0)
+
+    def test_prior_zero_returns_none(self):
+        row = pd.Series({'recent_avg_monthly': 50.0, 'prior_avg_monthly': 0.0})
+        self.assertIsNone(compute_pct_change(row))
+
+    def test_prior_nan_returns_none(self):
+        row = pd.Series({'recent_avg_monthly': 50.0, 'prior_avg_monthly': float('nan')})
+        self.assertIsNone(compute_pct_change(row))
+
+    def test_recent_nan_returns_nan(self):
+        # A sector with postings in the prior window but none in the recent one -
+        # the strongest possible "slowing" signal - still comes out as NaN rather
+        # than a large negative number, so it reads as "N/A" rather than as the
+        # biggest decline. Current behavior, pinned here rather than changed: see
+        # the fix report for the reasoning.
+        row = pd.Series({'recent_avg_monthly': float('nan'), 'prior_avg_monthly': 100.0})
+        self.assertTrue(pd.isna(compute_pct_change(row)))
 
 
 class TestFetchSalaryTrend(unittest.TestCase):
