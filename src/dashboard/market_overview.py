@@ -111,6 +111,76 @@ def render_headline(db, sector=None, position_level=None):
     })
 
 
+def fetch_industry_momentum(db, sector=None, position_level=None):
+    """
+    Return industries ranked by recent hiring momentum.
+
+    "Recent" and "prior" are the 3 most recent distinct year-months present in the
+    filtered data, and the 3 before that - picked from the data itself, not a
+    hardcoded calendar cutoff, so a narrow filter's own data decides the window.
+    recent_month_count/prior_month_count expose when a window has fewer than 3
+    months (a narrow filter can have gaps), so a thin average isn't silently
+    shown as a full one.
+    """
+    where = build_where_clause(sector, position_level)
+    sql = f"""
+        WITH monthly AS (
+            SELECT
+                sector,
+                strftime(posting_date, '%Y-%m') AS ym,
+                COUNT(*) AS postings
+            FROM jobs
+            {where}
+            GROUP BY sector, ym
+        ),
+        all_months AS (
+            SELECT DISTINCT ym FROM monthly ORDER BY ym DESC
+        ),
+        recent_months AS (
+            SELECT ym FROM all_months LIMIT 3
+        ),
+        prior_months AS (
+            SELECT ym FROM all_months LIMIT 3 OFFSET 3
+        )
+        SELECT
+            m.sector,
+            AVG(CASE WHEN m.ym IN (SELECT ym FROM recent_months) THEN m.postings END) AS recent_avg_monthly,
+            AVG(CASE WHEN m.ym IN (SELECT ym FROM prior_months) THEN m.postings END) AS prior_avg_monthly,
+            COUNT(DISTINCT CASE WHEN m.ym IN (SELECT ym FROM recent_months) THEN m.ym END) AS recent_month_count,
+            COUNT(DISTINCT CASE WHEN m.ym IN (SELECT ym FROM prior_months) THEN m.ym END) AS prior_month_count
+        FROM monthly m
+        WHERE m.ym IN (SELECT ym FROM recent_months) OR m.ym IN (SELECT ym FROM prior_months)
+        GROUP BY m.sector
+    """
+    df = db.query(sql)
+
+    def pct_change(row):
+        if pd.isna(row['prior_avg_monthly']) or row['prior_avg_monthly'] == 0:
+            return None
+        return round(100 * (row['recent_avg_monthly'] - row['prior_avg_monthly']) / row['prior_avg_monthly'], 1)
+
+    df['pct_change'] = df.apply(pct_change, axis=1)
+    return df.sort_values('pct_change', ascending=False, na_position='last').reset_index(drop=True)
+
+
+def render_industry_momentum(db, sector=None, position_level=None):
+    """Render the industries growing/slowing table."""
+    df = fetch_industry_momentum(db, sector, position_level)
+    st.subheader("Industries: Growing vs. Slowing")
+    if df.empty:
+        st.info("No postings match the current filters.")
+        return
+    display_df = df.copy()
+    display_df['pct_change'] = display_df['pct_change'].apply(format_percentage)
+    create_comparison_table(
+        display_df,
+        columns_to_show=[
+            'sector', 'recent_avg_monthly', 'prior_avg_monthly', 'pct_change',
+            'recent_month_count', 'prior_month_count',
+        ]
+    )
+
+
 def main():
     """Render the full Market Overview board."""
     initialize_session()

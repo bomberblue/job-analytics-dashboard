@@ -3,7 +3,7 @@ Unit tests for the Market Overview board.
 """
 import unittest
 from src.database.database_manager import DatabaseManager
-from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking
+from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking, fetch_industry_momentum
 
 
 class TestBuildWhereClause(unittest.TestCase):
@@ -66,6 +66,25 @@ class TestFetchIndustryRanking(unittest.TestCase):
     def test_unfiltered_returns_all_43_sectors(self):
         df = fetch_industry_ranking(self.db)
         self.assertEqual(len(df), 43)
+
+
+class TestFetchIndustryMomentum(unittest.TestCase):
+    def setUp(self):
+        self.db = DatabaseManager()
+
+    def test_unfiltered_shape(self):
+        df = fetch_industry_momentum(self.db)
+        expected_cols = {
+            'sector', 'recent_avg_monthly', 'prior_avg_monthly',
+            'recent_month_count', 'prior_month_count', 'pct_change'
+        }
+        self.assertEqual(set(df.columns), expected_cols)
+        self.assertGreater(len(df), 0)
+
+    def test_month_counts_capped_at_three(self):
+        df = fetch_industry_momentum(self.db)
+        self.assertTrue((df['recent_month_count'] <= 3).all())
+        self.assertTrue((df['prior_month_count'] <= 3).all())
 
 
 if __name__ == '__main__':
