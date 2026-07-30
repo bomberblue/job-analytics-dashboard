@@ -3,7 +3,7 @@ Unit tests for the Market Overview board.
 """
 import unittest
 from src.database.database_manager import DatabaseManager
-from src.dashboard.market_overview import build_where_clause, fetch_position_levels
+from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking
 
 
 class TestBuildWhereClause(unittest.TestCase):
@@ -35,6 +35,37 @@ class TestFetchPositionLevels(unittest.TestCase):
         levels = fetch_position_levels(self.db)
         self.assertEqual(len(levels), 9)
         self.assertIn("Executive", levels)
+
+
+class TestFetchHeadlineMetrics(unittest.TestCase):
+    def setUp(self):
+        self.db = DatabaseManager()
+
+    def test_unfiltered_shape(self):
+        df = fetch_headline_metrics(self.db)
+        self.assertEqual(list(df.columns), ['total_postings', 'median_pay'])
+        self.assertEqual(len(df), 1)
+        self.assertGreater(df.iloc[0]['total_postings'], 0)
+        self.assertLessEqual(df.iloc[0]['total_postings'], 1026079)
+        self.assertGreater(df.iloc[0]['median_pay'], 0)
+
+
+class TestFetchIndustryRanking(unittest.TestCase):
+    def setUp(self):
+        self.db = DatabaseManager()
+
+    def test_limit_respected(self):
+        df = fetch_industry_ranking(self.db, limit=3)
+        self.assertLessEqual(len(df), 3)
+
+    def test_sorted_descending(self):
+        df = fetch_industry_ranking(self.db)
+        postings = df['postings'].tolist()
+        self.assertEqual(postings, sorted(postings, reverse=True))
+
+    def test_unfiltered_returns_all_43_sectors(self):
+        df = fetch_industry_ranking(self.db)
+        self.assertEqual(len(df), 43)
 
 
 if __name__ == '__main__':

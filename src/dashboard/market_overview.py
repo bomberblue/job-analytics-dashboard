@@ -64,6 +64,53 @@ def render_filters(db):
     return sector, position_level
 
 
+def fetch_headline_metrics(db, sector=None, position_level=None):
+    """Return a 1-row DataFrame: total_postings, median_pay."""
+    where = build_where_clause(sector, position_level)
+    sql = f"""
+        SELECT
+            COUNT(*) AS total_postings,
+            ROUND(MEDIAN((salary_min + salary_max) / 2.0)) AS median_pay
+        FROM jobs
+        {where}
+    """
+    return db.query(sql)
+
+
+def fetch_industry_ranking(db, sector=None, position_level=None, limit=None):
+    """Return industries ranked by posting count: columns sector, postings."""
+    where = build_where_clause(sector, position_level)
+    limit_clause = f"LIMIT {int(limit)}" if limit else ""
+    sql = f"""
+        SELECT sector, COUNT(*) AS postings
+        FROM jobs
+        {where}
+        GROUP BY sector
+        ORDER BY postings DESC
+        {limit_clause}
+    """
+    return db.query(sql)
+
+
+def render_headline(db, sector=None, position_level=None):
+    """Render the headline metrics row."""
+    metrics = fetch_headline_metrics(db, sector, position_level)
+    top_industries = fetch_industry_ranking(db, sector, position_level, limit=3)
+
+    if metrics.empty or metrics.iloc[0]['total_postings'] == 0:
+        st.info("No postings match the current filters.")
+        return
+
+    row = metrics.iloc[0]
+    top_industry_label = ", ".join(top_industries['sector'].tolist()) if not top_industries.empty else "N/A"
+
+    create_metric_columns({
+        "Total Postings": f"{int(row['total_postings']):,}",
+        "Median Pay": format_currency(row['median_pay']),
+        "Top Industries": top_industry_label,
+    })
+
+
 def main():
     """Render the full Market Overview board."""
     initialize_session()
