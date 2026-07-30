@@ -3,7 +3,7 @@ Unit tests for the Market Overview board.
 """
 import unittest
 from src.database.database_manager import DatabaseManager
-from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking, fetch_industry_momentum, fetch_salary_trend, fetch_position_level_ranking
+from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking, fetch_industry_momentum, fetch_salary_trend, fetch_position_level_ranking, fetch_seasonality
 
 
 class TestBuildWhereClause(unittest.TestCase):
@@ -108,6 +108,23 @@ class TestFetchPositionLevelRanking(unittest.TestCase):
         self.assertEqual(len(df), 9)
         postings = df['postings'].tolist()
         self.assertEqual(postings, sorted(postings, reverse=True))
+
+
+class TestFetchSeasonality(unittest.TestCase):
+    def setUp(self):
+        self.db = DatabaseManager()
+
+    def test_twelve_months_in_calendar_order(self):
+        df = fetch_seasonality(self.db)
+        self.assertEqual(len(df), 12)
+        self.assertEqual(df['month_num'].tolist(), list(range(1, 13)))
+
+    def test_years_included_reflects_data_coverage(self):
+        df = fetch_seasonality(self.db)
+        # Under the Oct 2022 - May 2024 range, June-September only occur in one
+        # year (2023); October-May occur in two (2022/2023 or 2023/2024).
+        self.assertTrue((df['years_included'] >= 1).all())
+        self.assertTrue((df['years_included'] <= 2).all())
 
 
 if __name__ == '__main__':

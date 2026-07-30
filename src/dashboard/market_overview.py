@@ -241,6 +241,62 @@ def render_category_rankings(db, sector=None, position_level=None):
             st.bar_chart(levels.set_index('position_level')['postings'], use_container_width=True)
 
 
+_MONTH_NAMES = [
+    None, "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+]
+
+
+def fetch_seasonality(db, sector=None, position_level=None):
+    """
+    Return average postings per calendar month.
+
+    Groups by (year, month) first, then averages across years per calendar month -
+    not a naive group-by-month-only, which would overweight months that appear in
+    more years. years_included/total_postings expose the sample behind each bar
+    (e.g. October blends a near-empty Oct 2022 with a full Oct 2023) instead of
+    hiding it.
+    """
+    where = build_where_clause(sector, position_level)
+    sql = f"""
+        WITH monthly AS (
+            SELECT
+                strftime(posting_date, '%Y') AS yr,
+                EXTRACT(MONTH FROM posting_date)::INTEGER AS month_num,
+                COUNT(*) AS postings
+            FROM jobs
+            {where}
+            GROUP BY yr, month_num
+        )
+        SELECT
+            month_num,
+            ROUND(AVG(postings)) AS avg_postings,
+            COUNT(DISTINCT yr) AS years_included,
+            SUM(postings) AS total_postings
+        FROM monthly
+        GROUP BY month_num
+        ORDER BY month_num
+    """
+    df = db.query(sql)
+    df['month_name'] = df['month_num'].apply(lambda n: _MONTH_NAMES[n])
+    return df[['month_num', 'month_name', 'avg_postings', 'years_included', 'total_postings']]
+
+
+def render_seasonality(db, sector=None, position_level=None):
+    """Render the seasonality bar chart, plus the sample-size breakdown beneath it."""
+    df = fetch_seasonality(db, sector, position_level)
+    st.subheader("Seasonality")
+    if df.empty:
+        st.info("No postings match the current filters.")
+        return
+    st.bar_chart(df.set_index('month_name')['avg_postings'], use_container_width=True)
+    st.caption("Years and total postings behind each bar (a thin sample, like a month covered by only one partial year, will read as unreliable):")
+    create_comparison_table(
+        df,
+        columns_to_show=['month_name', 'years_included', 'total_postings']
+    )
+
+
 def main():
     """Render the full Market Overview board."""
     initialize_session()
