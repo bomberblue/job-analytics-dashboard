@@ -308,7 +308,15 @@ def main():
     sector, position_level = render_filters(db)
     st.divider()
 
-    # Sections are wired in here by Task 8, after each is built and tested on its own.
+    render_headline(db, sector, position_level)
+    st.divider()
+    render_industry_momentum(db, sector, position_level)
+    st.divider()
+    render_salary_trend(db, sector, position_level)
+    st.divider()
+    render_category_rankings(db, sector, position_level)
+    st.divider()
+    render_seasonality(db, sector, position_level)
 
 
 if __name__ == "__main__":
