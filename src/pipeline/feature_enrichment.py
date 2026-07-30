@@ -1,0 +1,217 @@
+"""
+Feature enrichment for the cleaned job dataset.
+
+Renames the cleaned dataset's source column names to the names used by ``src/pipeline/`` and the
+``jobs`` table, and derives the feature columns ``feature_engineer.py`` adds -- so a cleaned frame
+can feed the existing dashboard without a translation layer.
+
+Operates purely on DataFrames.  How the cleaned dataset was produced, stored, or loaded is the
+caller's concern; nothing here reads or writes files.
+
+Two deliberate deviations from the current pipeline behaviour, both documented rather than silent:
+
+1. ``job_id`` carries the real source posting id (``metadata_jobPostId``) instead of a fresh UUID,
+   so enriched rows can still be joined back to the raw layer, to the category bridge table, and to
+   the originating job board.  ``DatabaseManager.insert_jobs`` regenerates it as a UUID, which
+   makes that impossible.
+2. ``competitiveness_score`` divides by the 99th percentile of salary, not ``max()``.  Ceiling
+   outliers are intentionally left in the data (flagged via ``salary_flag``, not nulled), so a
+   ``max()`` denominator is dominated by them and compresses the median row's salary contribution
+   to roughly 0.02 of the 50 points available.
+
+Two ``feature_engineer.py`` columns are deliberately NOT reproduced:
+
+* ``days_posted`` -- it is ``now() - posting_date``, which measures when ingestion ran rather than
+  any property of the posting, and would make the result change on every execution.
+  ``listing_days`` (``expiry_date - posting_date``) is the deterministic equivalent and is already
+  present on the cleaned frame.
+* ``is_growth_role`` -- its definition (``count > median * 0.2``) marks essentially every role.
+
+Note that of everything ``feature_engineer.py`` computes, only ``seniority_years`` actually reaches
+the ``jobs`` table; ``columns_order`` in ``database_manager.py`` drops the rest at load time.  They
+are produced here anyway because the enriched frame is meant to be usable directly for analysis,
+not only as a database feed.
+"""
+import re
+
+import numpy as np
+import pandas as pd
+
+__all__ = [
+    'COMMON_SKILLS',
+    'RENAME_MAP',
+    'JOBS_SCHEMA_COLUMNS',
+    'band_experience',
+    'band_salary',
+    'extract_skills_vectorised',
+    'feature_enrichment',
+    'schema_report',
+]
+
+# Skill vocabulary and matching rule copied from src/pipeline/data_cleaner.py so the two agree.
+COMMON_SKILLS = [
+    'Python', 'Java', 'JavaScript', 'SQL', 'R', 'C++', 'Go', 'Rust',
+    'React', 'Angular', 'Vue', 'Django', 'Flask', 'Spring',
+    'AWS', 'Azure', 'GCP', 'Kubernetes', 'Docker',
+    'Machine Learning', 'AI', 'Data Science', 'Analytics',
+    'Salesforce', 'SAP', 'Oracle', 'MySQL', 'PostgreSQL',
+    'Agile', 'Scrum', 'DevOps', 'CI/CD',
+    'Node.js', 'Express', 'FastAPI',
+]
+
+# Cleaned dataset's source column name -> src/pipeline/ column name.
+RENAME_MAP = {
+    'metadata_jobPostId':                 'job_id',
+    'postedCompany_name':                 'company',
+    'primary_category':                   'sector',
+    'salary_minimum':                     'salary_min',
+    'salary_maximum':                     'salary_max',
+    'average_salary':                     'salary_midpoint',
+    'minimumYearsExperience':             'seniority_years',
+    'positionLevels':                     'position_level',
+    'employmentTypes':                    'job_type',
+    'metadata_newPostingDate':            'posting_date',
+    'metadata_expiryDate':                'expiry_date',
+    'metadata_totalNumberOfView':         'views',
+    'metadata_totalNumberJobApplication': 'applications',
+    'numberOfVacancies':                  'vacancies',
+    'metadata_repostCount':               'repost_count',
+}
+
+# JOBS_SCHEMA column order from src/database/schema.py, for the loader's convenience.
+JOBS_SCHEMA_COLUMNS = [
+    'job_id', 'title', 'company', 'sector', 'sub_sector', 'location',
+    'salary_min', 'salary_max', 'salary_currency', 'experience_level',
+    'seniority_years', 'position_level', 'job_type', 'posting_date',
+    'expiry_date', 'views', 'applications', 'vacancies', 'repost_count',
+    'skills', 'description', 'requirements', 'created_at',
+]
+
+
+def _bool(mask):
+    """np.select needs plain bool arrays; comparisons on nullable Int/Float dtypes give pd.NA."""
+    return mask.fillna(False).to_numpy(dtype=bool)
+
+
+def band_experience(years):
+    """Band numeric years of experience. Mirrors DataCleaner.standardize_experience_level.
+
+    Missing years become "Unknown", matching the pipeline, which passes the raw (NaN-bearing)
+    column to that function.
+    """
+    return pd.Series(
+        np.select([_bool(years.isna()), _bool(years <= 1), _bool(years <= 4)],
+                  ['Unknown',           'Entry Level',     'Mid Level'], default='Senior'),
+        index=years.index, dtype='object')
+
+
+def band_salary(max_sal):
+    """Band a salary maximum. Mirrors FeatureEngineer.create_salary_band."""
+    return pd.Series(
+        np.select([_bool(max_sal.isna()), _bool(max_sal < 3000),
+                   _bool(max_sal < 5000), _bool(max_sal < 8000)],
+                  ['Unknown', 'Entry (< $3k)', 'Mid ($3-5k)', 'Senior ($5-8k)'],
+                  default='Executive (> $8k)'),
+        index=max_sal.index, dtype='object')
+
+
+def extract_skills_vectorised(text):
+    """Vectorised form of DataCleaner.extract_skills -- same boundary rule, one pass per skill.
+
+    Returns ``(skills_series, skill_count_array)``.
+
+    The boundary is ``(?<![a-zA-Z0-9])``/``(?![a-zA-Z0-9])`` rather than ``\\b`` so that skills
+    containing symbols ("C++", "CI/CD", "Node.js") still match.
+
+    Note: the cleaned dataset has no description column, so callers pass titles only.  That
+    limitation is inherited from the source data (``pipeline.py`` likewise sets
+    ``description = ''``), not introduced here, but it means ``skill_count`` is a title-keyword
+    signal rather than a requirements analysis.
+    """
+    hits = {}
+    for skill in COMMON_SKILLS:
+        pattern = r'(?<![a-zA-Z0-9])' + re.escape(skill) + r'(?![a-zA-Z0-9])'
+        hits[skill] = text.str.contains(pattern, case=False, regex=True, na=False)
+
+    mask = pd.DataFrame(hits, index=text.index)
+    arr, cols = mask.to_numpy(), np.array(mask.columns)
+    skills = [', '.join(cols[row]) if row.any() else 'Not Specified' for row in arr]
+    return pd.Series(skills, index=text.index), arr.sum(axis=1).astype('int8')
+
+
+def feature_enrichment(df, job_category=None):
+    """Rename the cleaned dataset's columns to the src/pipeline/ names and derive feature columns.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The cleaned dataset, still using its source column names (the keys of ``RENAME_MAP``).
+    job_category : pd.DataFrame, optional
+        The category bridge table, one row per (posting, category) pair with columns
+        ``metadata_jobPostId``, ``category_id`` and ``category``.  When supplied, ``sub_sector`` is
+        populated from each posting's *second* category -- a column the pipeline leaves NULL.  Row
+        order within a posting must match the order the categories were originally listed in.
+
+    Returns
+    -------
+    pd.DataFrame
+        A NEW frame; ``df`` is not modified.  Contains every ``JOBS_SCHEMA_COLUMNS`` entry plus any
+        provenance columns the cleaning step carried (``salary_flag``, ``dup_group_size``, ...), so
+        it is a superset of the ``jobs`` table.
+    """
+    out = df.rename(columns=RENAME_MAP).copy()
+
+    # --- sub_sector: second category from the bridge table (pipeline leaves this NULL) ---
+    if job_category is not None:
+        second_position = job_category.groupby('metadata_jobPostId', observed=True).cumcount() == 1
+        second = job_category[second_position].set_index('metadata_jobPostId')['category']
+        out['sub_sector'] = out['job_id'].map(second).astype('category')
+    else:
+        out['sub_sector'] = pd.Series(pd.NA, index=out.index, dtype='object')
+
+    # --- constants the source data simply does not carry ---
+    out['location'] = pd.Series('Singapore', index=out.index).astype('category')
+    out['salary_currency'] = pd.Series('SGD', index=out.index).astype('category')
+    out['description'] = ''    # not present in the source data
+    out['requirements'] = ''   # not present in the source data
+    out['created_at'] = pd.Timestamp.now()  # load-time audit field; JOBS_SCHEMA defaults it too
+
+    # --- banded labels, matching the pipeline's thresholds exactly ---
+    out['experience_level'] = band_experience(out['seniority_years']).astype('category')
+    out['salary_band'] = band_salary(out['salary_max']).astype('category')
+
+    # The pipeline does seniority_years = min_years_experience.fillna(0).astype(int). Kept as-is,
+    # including the mismatch with experience_level above, which reads missing years as "Unknown".
+    out['seniority_years'] = out['seniority_years'].fillna(0).astype('int8')
+
+    # --- skills (titles only -- no description column exists) ---
+    out['skills'], out['skill_count'] = extract_skills_vectorised(out['title'])
+
+    # days_posted is deliberately not reproduced -- see the module docstring. listing_days already
+    # carries the deterministic equivalent.
+
+    # --- competitiveness_score: p99 denominator, NOT max() (see deviation 2) ---
+    if 'salary_flag' in out.columns:
+        salary_basis = out.loc[out['salary_flag'] == 'ok', 'salary_midpoint']
+    else:
+        salary_basis = out['salary_midpoint']
+    sal_p99 = salary_basis.quantile(.99)
+    skill_max = max(int(out['skill_count'].max()), 1)
+    out['competitiveness_score'] = (
+        (out['salary_midpoint'] / sal_p99 * 50).clip(upper=50).astype('Float64').fillna(25)
+        + (out['skill_count'] / skill_max * 50)
+    ).clip(0, 100).astype('Float64')
+
+    return out
+
+
+def schema_report(enriched):
+    """Compare an enriched frame against JOBS_SCHEMA_COLUMNS.
+
+    Returns ``{'missing': [...], 'extra': [...]}``.  ``missing`` must be empty for the frame to be
+    loadable into the ``jobs`` table; ``extra`` is the provenance superset and is expected.
+    """
+    return {
+        'missing': [c for c in JOBS_SCHEMA_COLUMNS if c not in enriched.columns],
+        'extra': [c for c in enriched.columns if c not in JOBS_SCHEMA_COLUMNS],
+    }
