@@ -108,8 +108,8 @@ class DataPipeline:
             else:
                 df['job_type'] = None
             
-            if 'metadata_newPostingDate' in df.columns:
-                df['posting_date'] = df['metadata_newPostingDate']
+            if 'metadata_originalPostingDate' in df.columns:
+                df['posting_date'] = df['metadata_originalPostingDate']
             else:
                 df['posting_date'] = None
             
