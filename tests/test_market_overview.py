@@ -3,7 +3,7 @@ Unit tests for the Market Overview board.
 """
 import unittest
 from src.database.database_manager import DatabaseManager
-from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking, fetch_industry_momentum, fetch_salary_trend
+from src.dashboard.market_overview import build_where_clause, fetch_position_levels, fetch_headline_metrics, fetch_industry_ranking, fetch_industry_momentum, fetch_salary_trend, fetch_position_level_ranking
 
 
 class TestBuildWhereClause(unittest.TestCase):
@@ -97,6 +97,17 @@ class TestFetchSalaryTrend(unittest.TestCase):
         self.assertGreater(len(df), 0)
         months = df['month'].tolist()
         self.assertEqual(months, sorted(months))
+
+
+class TestFetchPositionLevelRanking(unittest.TestCase):
+    def setUp(self):
+        self.db = DatabaseManager()
+
+    def test_returns_all_nine_levels_sorted_descending(self):
+        df = fetch_position_level_ranking(self.db)
+        self.assertEqual(len(df), 9)
+        postings = df['postings'].tolist()
+        self.assertEqual(postings, sorted(postings, reverse=True))
 
 
 if __name__ == '__main__':

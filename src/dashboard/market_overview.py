@@ -207,6 +207,40 @@ def render_salary_trend(db, sector=None, position_level=None):
     st.line_chart(df.set_index('month')['median_pay'], use_container_width=True)
 
 
+def fetch_position_level_ranking(db, sector=None, position_level=None):
+    """Return position levels ranked by posting count: columns position_level, postings."""
+    where = build_where_clause(sector, position_level)
+    sql = f"""
+        SELECT position_level, COUNT(*) AS postings
+        FROM jobs
+        {where}
+        GROUP BY position_level
+        ORDER BY postings DESC
+    """
+    return db.query(sql)
+
+
+def render_category_rankings(db, sector=None, position_level=None):
+    """Render the two ranked bar charts: industries and position levels."""
+    industries = fetch_industry_ranking(db, sector, position_level, limit=None)
+    levels = fetch_position_level_ranking(db, sector, position_level)
+
+    st.subheader("Top Categories by Openings")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.caption("By industry")
+        if industries.empty:
+            st.info("No postings match the current filters.")
+        else:
+            st.bar_chart(industries.set_index('sector')['postings'], use_container_width=True)
+    with col2:
+        st.caption("By position level")
+        if levels.empty:
+            st.info("No postings match the current filters.")
+        else:
+            st.bar_chart(levels.set_index('position_level')['postings'], use_container_width=True)
+
+
 def main():
     """Render the full Market Overview board."""
     initialize_session()
