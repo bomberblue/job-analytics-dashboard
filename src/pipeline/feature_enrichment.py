@@ -19,6 +19,21 @@ Two deliberate deviations from the current pipeline behaviour, both documented r
    ``max()`` denominator is dominated by them and compresses the median row's salary contribution
    to roughly 0.02 of the 50 points available.
 
+Five ``JOBS_SCHEMA`` columns are absent from ``JOBS_SCHEMA_COLUMNS`` and are never built:
+``location`` and ``salary_currency`` would be the same constant on every row (``'Singapore'`` /
+``'SGD'`` -- the source is a Singapore-only, monthly-SGD extract), ``description`` and
+``requirements`` would be empty strings because the source CSV carries no such fields, and
+``created_at`` is a load-time audit stamp rather than a property of the posting -- writing it here
+makes the parquet's bytes change on every execution with no change in the data.  A constant column
+cannot be filtered on, cannot correlate with anything, and costs memory on every read.  Nothing
+downstream breaks: ``DatabaseManager.insert_jobs`` back-fills ``salary_currency`` and
+``created_at`` itself and filters ``columns_order`` to the columns actually present, and the two
+text columns are nullable.
+
+This module does not model that judgement, only the outcome -- *which* columns are worth
+materialising is a property of the extract being cleaned, so it is the cleaning step that decides
+it and asserts on it.  Here it is simply a shorter column list.
+
 Two ``feature_engineer.py`` columns are deliberately NOT reproduced:
 
 * ``days_posted`` -- it is ``now() - posting_date``, which measures when ingestion ran rather than
@@ -78,13 +93,17 @@ RENAME_MAP = {
     'metadata_repostCount':               'repost_count',
 }
 
-# JOBS_SCHEMA column order from src/database/schema.py, for the loader's convenience.
+# The JOBS_SCHEMA columns this module produces, in src/database/schema.py order, for the loader's
+# convenience.  location, salary_currency, description, requirements and created_at are absent by
+# design -- they would be constant or empty (see the module docstring), and omitting them from the
+# list rather than skipping them at build time means nothing can read it and reintroduce them.
+# The full table definition still lives in src/database/schema.py.
 JOBS_SCHEMA_COLUMNS = [
-    'job_id', 'title', 'company', 'sector', 'sub_sector', 'location',
-    'salary_min', 'salary_max', 'salary_currency', 'experience_level',
+    'job_id', 'title', 'company', 'sector', 'sub_sector',
+    'salary_min', 'salary_max', 'experience_level',
     'seniority_years', 'position_level', 'job_type', 'posting_date',
     'expiry_date', 'views', 'applications', 'vacancies', 'repost_count',
-    'skills', 'description', 'requirements', 'created_at',
+    'skills',
 ]
 
 
@@ -123,10 +142,10 @@ def extract_skills_vectorised(text):
     The boundary is ``(?<![a-zA-Z0-9])``/``(?![a-zA-Z0-9])`` rather than ``\\b`` so that skills
     containing symbols ("C++", "CI/CD", "Node.js") still match.
 
-    Note: the cleaned dataset has no description column, so callers pass titles only.  That
-    limitation is inherited from the source data (``pipeline.py`` likewise sets
-    ``description = ''``), not introduced here, but it means ``skill_count`` is a title-keyword
-    signal rather than a requirements analysis.
+    Note: the source data has no description or requirements text at all -- which is why neither is
+    in ``JOBS_SCHEMA_COLUMNS`` -- so callers pass titles only.  That limitation is inherited from
+    the source, not introduced here, but it means ``skill_count`` is a title-keyword signal rather
+    than a requirements analysis.
     """
     hits = {}
     for skill in COMMON_SKILLS:
@@ -146,6 +165,7 @@ def feature_enrichment(df, job_category=None):
     ----------
     df : pd.DataFrame
         The cleaned dataset, still using its source column names (the keys of ``RENAME_MAP``).
+        Assumed already free of dead columns -- the cleaning step is what guarantees that.
     job_category : pd.DataFrame, optional
         The category bridge table, one row per (posting, category) pair with columns
         ``metadata_jobPostId``, ``category_id`` and ``category``.  When supplied, ``sub_sector`` is
@@ -156,8 +176,7 @@ def feature_enrichment(df, job_category=None):
     -------
     pd.DataFrame
         A NEW frame; ``df`` is not modified.  Contains every ``JOBS_SCHEMA_COLUMNS`` entry plus any
-        provenance columns the cleaning step carried (``salary_flag``, ``dup_group_size``, ...), so
-        it is a superset of the ``jobs`` table.
+        provenance columns the cleaning step carried (``salary_flag``, ``dup_group_size``, ...).
     """
     out = df.rename(columns=RENAME_MAP).copy()
 
@@ -168,13 +187,6 @@ def feature_enrichment(df, job_category=None):
         out['sub_sector'] = out['job_id'].map(second).astype('category')
     else:
         out['sub_sector'] = pd.Series(pd.NA, index=out.index, dtype='object')
-
-    # --- constants the source data simply does not carry ---
-    out['location'] = pd.Series('Singapore', index=out.index).astype('category')
-    out['salary_currency'] = pd.Series('SGD', index=out.index).astype('category')
-    out['description'] = ''    # not present in the source data
-    out['requirements'] = ''   # not present in the source data
-    out['created_at'] = pd.Timestamp.now()  # load-time audit field; JOBS_SCHEMA defaults it too
 
     # --- banded labels, matching the pipeline's thresholds exactly ---
     out['experience_level'] = band_experience(out['seniority_years']).astype('category')
@@ -206,7 +218,7 @@ def feature_enrichment(df, job_category=None):
 
 
 def schema_report(enriched):
-    """Compare an enriched frame against JOBS_SCHEMA_COLUMNS.
+    """Compare an enriched frame against the schema.
 
     Returns ``{'missing': [...], 'extra': [...]}``.  ``missing`` must be empty for the frame to be
     loadable into the ``jobs`` table; ``extra`` is the provenance superset and is expected.
