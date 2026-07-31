@@ -207,16 +207,19 @@ Observed max was **88** years; tail values {59: 1, 61: 1, 62: 1, 76: 1, 87: 2, 8
 
 | fix | before | after |
 | --- | ---: | ---: |
-| rows changed by the `title` repair | 21,757 | 0 |
+| rows changed by the `title` repair | 21,934 | 0 |
+| ...of those, carrying a zero-width character | 184 | 0 |
 | rows changed by the `postedCompany_name` repair | 9,616 | 0 |
-| distinct titles | 377,084 | 364,760 (case-folded) |
+| distinct titles | 377,084 | 364,753 (case-folded) |
 | distinct companies | 53,151 | 53,150 (`postedCompany_name`, repaired in place) |
 
-**Justification.** Three operations get lumped together as "normalisation" and are treated differently here. A **repair** - stripping whitespace, collapsing internal runs - goes **in place**: `"  Chef "` carries no information `"Chef"` lacks, so there is nothing to preserve, and the changed-row counts above are what make the mutation auditable. A **re-key** - case-folding - gets its **own column**, because it destroys a display form (`IT` vs `it`, `PhD`, `C++`) that the dashboard needs.
+**Justification.** Three operations get lumped together as "normalisation" and are treated differently here. A **repair** - stripping whitespace, collapsing internal runs, dropping zero-width characters - goes **in place**: `"  Chef "` carries no information `"Chef"` lacks, so there is nothing to preserve, and the changed-row counts above are what make the mutation auditable. A **re-key** - case-folding - gets its **own column**, because it destroys a display form (`IT` vs `it`, `PhD`, `C++`) that the dashboard needs.
 
-`title` gets the repair in place. The fold is **not stored at all** - not as an overwrite, because it destroys the display form, and not as a second column, because `title.str.lower()` rebuilds it in one line from a value already on disk. It is computed as a local key where it is used (section 5) and discarded. It earns its place there: it collapses **12,324** distinct titles - without it "Software Engineer" and "software engineer" count as different roles, and the duplicate check misses 322 rows - and what survives into the saved data is `dup_group_id`, the result of the folded grouping.
+**Zero-width characters are part of the repair**, because `\s` does not match them. U+200B, the BOM and the word joiner render as nothing yet split otherwise-identical titles into separate values - `ACCOUNTS ASSISTANT` prefixed with a zero-width space counts separately from `ACCOUNTS ASSISTANT` in every chart. The joiners U+200C/U+200D are excluded from that class deliberately: U+200D is what holds an emoji sequence together, and 75 rows (52 distinct titles) use one, so stripping it would corrupt content rather than clean it.
 
-`postedCompany_name` gets **only the repair**. An earlier version added a `company_normalised` join key; measured against this extract it merged exactly one company (`CHURCH OF OUR SAVIOUR`, and through the whitespace fix rather than the case fold) because the source is already uppercase - 6.1 MB and a second name for one concept, to merge one group. An operation that only repairs belongs in place, so the column is gone and `postedCompany_name` is itself the join key. The `.upper()` is retained inside the repair as a guard against a future mixed-case extract.
+`title` gets the repair in place. The fold is **not stored at all** - not as an overwrite, because it destroys the display form, and not as a second column, because `title.str.lower()` rebuilds it in one line from a value already on disk. It is computed as a local key where it is used (section 5) and discarded. It earns its place there: it collapses **12,331** distinct titles - without it "Software Engineer" and "software engineer" count as different roles, and the duplicate check misses 322 rows - and what survives into the saved data is `dup_group_id`, the result of the folded grouping.
+
+`postedCompany_name` gets the repair **plus an in-place `.upper()`** - the one place this pipeline knowingly bends the rule above. The source is uppercase for all but a single entry, so the fold merges exactly one pair: `Church of Our Saviour` into `CHURCH OF OUR SAVIOUR`. That is a real display form being destroyed, so strictly it should earn its own column. It does not get one because an earlier `company_normalised` cost 6.1 MB and a second name for one concept in order to merge that single pair; normalising a lone outlier to the house style of the other 53,149 is the better trade, and it leaves `postedCompany_name` as the join key. Whitespace alone merges nothing here - all 9,616 defects are internal double spaces inside names that stay distinct.
 
 Legal-suffix variation (`PTE. LTD.` vs `PTE LTD`) is left alone deliberately: that is entity resolution, not cleaning, and needs its own reviewed pass.
 
@@ -280,7 +283,7 @@ The 269 ceiling outliers are a related but separate case: they are not missing, 
 | --- | --- | --- |
 | 1. exact duplicate row (all columns) | 0 | 0 |
 | 2. duplicate primary key (jobPostId) | 0 | 0 |
-| 3. identical content, any date | 369,888 | 35.41 |
+| 3. identical content, any date | 369,889 | 35.41 |
 | 4. identical content, same posting date | 34,878 | 3.34 |
 | 5. company + title + posting date | 49,619 | 4.75 |
 
@@ -290,7 +293,7 @@ The 269 ceiling outliers are a related but separate case: they are not missing, 
 
 **Keys 1 and 2 are clean.** 0 exact duplicate rows and 0 duplicate `metadata_jobPostId` - the primary key is sound and the loader is not double-reading anything. Any deduplication beyond this point is a judgement about business meaning, not a repair.
 
-**Key 3 (369,888 rows) is serial reposting, not duplication.** The same role posted by the same agency on different dates with different job IDs is how recruitment agencies work. Each is a real posting that really appeared on the platform. Collapsing them would erase the time dimension of hiring demand - exactly what a job-market dashboard is measuring.
+**Key 3 (369,889 rows) is serial reposting, not duplication.** The same role posted by the same agency on different dates with different job IDs is how recruitment agencies work. Each is a real posting that really appeared on the platform. Collapsing them would erase the time dimension of hiring demand - exactly what a job-market dashboard is measuring.
 
 **Key 4 (34,878 rows) is the only arguable case - and the evidence says keep.** These are 56,222 rows in 21,344 groups of identical same-day postings (largest group: 260). The decisive test: **16,990 of 21,344 groups have different view counts** across their members, and 5,902 have different application counts. Distinct traffic means the platform served them as separate listings that jobseekers found and viewed separately. Dropping them would discard real engagement data.
 
@@ -306,7 +309,7 @@ They are also concentrated: 37.8% are `isPostedOnBehalf` against a 5.9% baseline
 
 **Recommended handling downstream.** Keep every row for volume and time-series work. When ranking employers or estimating distinct job openings, deduplicate at query time with `drop_duplicates('dup_group_id')` - reversible, and the choice stays visible in the analysis rather than being baked into the stored dataset. `numberOfVacancies` is tracked separately, so a company posting five identical roles is not the same as one posting with five vacancies.
 
-`dup_group_id` stores the key-4 grouping as a group *number* rather than as the nine columns that produced it: 1,009,709 groups in 4.2 MB, against the 45.8 MB the case-folded title component alone would cost as a stored column. That fold is built as a local key and discarded - `title.str.lower()` rebuilds it in one line - while the grouping it produces is preserved exactly, including the 322 duplicate rows across 76 groups that a case-sensitive title key misses ("Air Freight officer" / "Air freight officer").
+`dup_group_id` stores the key-4 grouping as a group *number* rather than as the nine columns that produced it: 1,009,709 groups in 4.2 MB, against the 45.8 MB the case-folded title component alone would cost as a stored column. That fold is built as a local key and discarded - `title.str.lower()` rebuilds it in one line - while the grouping it produces is preserved exactly, including the 322 duplicate rows across 209 groups that a case-sensitive title key misses ("Air Freight officer" / "Air freight officer").
 
 ---
 
@@ -399,7 +402,7 @@ Both are **computed and then dropped** rather than removed from `feature_enrichm
 | salary_maximum | Int32 | 9,577 | 0.92 | 2,486 | 0 |
 | salary_minimum | Int32 | 9,577 | 0.92 | 2,014 | 0 |
 | status_jobStatus | category | 0 | 0 | 3 | 0 |
-| title | str | 0 | 0 | 375,517 | 0 |
+| title | str | 0 | 0 | 375,510 | 0 |
 | average_salary | Float64 | 9,577 | 0.92 | 3,915 | 0 |
 | primary_category | category | 0 | 0 | 43 | 0 |
 | n_categories | int8 | 0 | 0 | 5 | 0 |
