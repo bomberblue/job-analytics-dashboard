@@ -326,6 +326,8 @@ Implemented in **`src/pipeline/feature_enrichment.py`** and imported by the note
 | `skills`, `skill_count` | regex over `title` | yes - same vocabulary and boundary rule |
 | `sub_sector` | 2nd category from the bridge table | **no** - pipeline leaves it NULL |
 | `competitiveness_score` | p99 salary denominator | **no** - pipeline uses `max()` |
+
+`skill_count` and `competitiveness_score` are built here and then dropped in section 7 - they are listed because the enrichment produces them, not because they reach the file.
 | `job_id` | `metadata_jobPostId` | **no** - pipeline mints a fresh UUID |
 
 ### 5 `JOBS_SCHEMA` columns deliberately not materialised
@@ -355,7 +357,7 @@ These are absent from `JOBS_SCHEMA_COLUMNS` in `feature_enrichment.py`, so no ca
 
 **`is_growth_role`** uses `count > median * 0.2`, which marks essentially every role in the file.
 
-Neither is part of `JOBS_SCHEMA`. Worth noting more broadly: of everything `feature_engineer.py` computes, **only `seniority_years` actually reaches the `jobs` table** - `salary_midpoint`, `salary_band`, `skill_count`, `competitiveness_score`, `days_posted` and `is_growth_role` are all dropped by `columns_order` at load time. The remaining ones are kept in `jobs_enriched.parquet` regardless, because it is meant to be usable directly for analysis rather than only as a database feed.
+Neither is part of `JOBS_SCHEMA`. Worth noting more broadly: of everything `feature_engineer.py` computes, **only `seniority_years` actually reaches the `jobs` table** - `salary_midpoint`, `salary_band`, `skill_count`, `competitiveness_score`, `days_posted` and `is_growth_role` are all dropped by `columns_order` at load time. `salary_midpoint` and `salary_band` are kept in `jobs_enriched.parquet` anyway, because it is meant to be usable directly for analysis rather than only as a database feed; `skill_count` and `competitiveness_score` are not, for the separate reason given in section 7.
 
 Coverage of the derived columns: `sub_sector` populated on **389,636** rows (37.3%), `skills` matched on **30,491** rows (2.9%, mean `skill_count` 0.032). The skills rate is low because **the source CSV has no description column** - which is also why `description` is a dead column above - so the skill regex only ever sees job titles. That limitation is inherited from the source data, but it means `skill_count` and anything derived from it should be read as a title-keyword signal rather than a requirements analysis.
 
