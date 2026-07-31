@@ -416,6 +416,6 @@ Both are **computed and then dropped** rather than removed from `feature_enrichm
 
 ### Outputs
 
-- `data/processed/jobs_clean.parquet` - 1,044,587 rows
+- `data/processed/jobs_cleaned.parquet` - 1,044,587 rows
 - `data/processed/job_category.parquet` - 1,767,785 rows
 - `data/processed/jobs_enriched.parquet` - 1,044,587 rows
