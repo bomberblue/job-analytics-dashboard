@@ -96,13 +96,13 @@ Cross-field logic also holds: `originalPostingDate > newPostingDate` in **0** ro
 
 ### 1.4 `average_salary` -> `float32`: the conversion whose answer depends on when you ask
 
-| measured at | max value | max round-trip error |
+| measured at | `.5` values above $8,388,608 | max round-trip error |
 | --- | ---: | ---: |
-| raw file | $12,666,400 | **0.5** |
-| after synthetic rows removed | $12,666,400 | 0.0 |
-| after the Step 7 salary fix | $12,666,400 | 0.0 |
+| raw file | 1 | **0.5** |
+| after synthetic rows removed | 0 | 0.0 |
+| after the Step 7 salary fix | 0 | 0.0 |
 
-**On the raw file the cast is lossy** - error 0.5, because float32 carries only ~7 significant digits and the multi-million synthetic salaries land beyond the range where it can represent a `.5`. 3,838 rows carry a genuine `.5` fraction (odd min+max), so this is a real error, not a display artefact. Remove the synthetic rows and the same cast becomes exact.
+**On the raw file the cast is lossy** - error 0.5, and it traces to a single row. float32 has a 24-bit mantissa, so above $8,388,608 it cannot represent a `.5` at all, and the raw file holds exactly 1 such value - a synthetic posting at $10,593,120.5. That single row is the whole of the error. The `.5` fractions themselves are ordinary: 3,838 surviving rows carry one (odd min+max) and every one round-trips exactly, because they sit below the limit. Remove the synthetic rows and the cast becomes lossless.
 
 The point is not that float32 is unusable - it is that "is this conversion lossless?" has no answer independent of the cleaning order. Profiling dtypes on a dirty frame gives a different verdict than profiling the same frame after junk-row removal, which is why every dtype decision in this notebook is made last.
 
