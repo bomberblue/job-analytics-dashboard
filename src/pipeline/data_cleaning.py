@@ -176,3 +176,38 @@ def normalize_text(df):
     df['postedCompany_name'] = _repair(df['postedCompany_name'].str.upper())
     print("  → Normalized title and postedCompany_name text")
     return df
+
+
+def add_derived_columns(df):
+    """Add listing_days, is_repost and source. No values are imputed - zeros are left as-is."""
+    df = df.copy()
+    df['listing_days'] = (df['metadata_expiryDate'] - df['metadata_newPostingDate']).dt.days.astype('int16')
+    df['is_repost'] = df['metadata_repostCount'] > 0
+    df['source'] = df['metadata_jobPostId'].str.extract(r'^([A-Za-z]+)')[0]
+    print("  → Added listing_days, is_repost, source")
+    return df
+
+
+def flag_duplicates(df):
+    """Flag (not drop) rows that share company/title/employment/level/category/salary/vacancies
+    and posting date. dup_group_id/-size/is_same_day_dup let downstream analysis decide."""
+    df = df.copy()
+    title_key = df['title'].str.lower()
+    same_day = pd.DataFrame({
+        'title': title_key,
+        'company': df['postedCompany_name'],
+        'employment': df['employmentTypes'],
+        'level': df['positionLevels'],
+        'category': df['primary_category'],
+        'salary_min': df['salary_minimum'],
+        'salary_max': df['salary_maximum'],
+        'vacancies': df['numberOfVacancies'],
+        'posted': df['metadata_newPostingDate'],
+    })
+    group_id = same_day.groupby(list(same_day.columns), dropna=False, observed=True).ngroup()
+    df['dup_group_id'] = group_id.astype('int32')
+    df['dup_group_size'] = group_id.map(group_id.value_counts()).astype('int16')
+    df['is_same_day_dup'] = df['dup_group_size'] > 1
+    print(f"  → Flagged {int(df['is_same_day_dup'].sum()):,} same-day duplicate rows "
+          f"in {int(df.loc[df['is_same_day_dup'], 'dup_group_id'].nunique()):,} groups")
+    return df

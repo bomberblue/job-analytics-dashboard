@@ -3,7 +3,7 @@ import json
 import unittest
 import pandas as pd
 
-from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories, fix_salaries, cap_experience, normalize_text
+from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories, fix_salaries, cap_experience, normalize_text, add_derived_columns, flag_duplicates
 
 
 class TestRemoveGhostRows(unittest.TestCase):
@@ -186,6 +186,41 @@ class TestNormalizeText(unittest.TestCase):
         df = pd.DataFrame({'title': [zwj_text], 'postedCompany_name': ['Acme']})
         result = normalize_text(df)
         self.assertIn(chr(0x200D), result.loc[0, 'title'])
+
+
+class TestAddDerivedColumns(unittest.TestCase):
+    def test_computes_listing_days_is_repost_source(self):
+        df = pd.DataFrame({
+            'metadata_newPostingDate': pd.to_datetime(['2026-01-01']),
+            'metadata_expiryDate': pd.to_datetime(['2026-01-15']),
+            'metadata_repostCount': [2],
+            'metadata_jobPostId': ['MCF-123'],
+        })
+        result = add_derived_columns(df)
+        self.assertEqual(result.loc[0, 'listing_days'], 14)
+        self.assertTrue(bool(result.loc[0, 'is_repost']))
+        self.assertEqual(result.loc[0, 'source'], 'MCF')
+
+
+class TestFlagDuplicates(unittest.TestCase):
+    def test_flags_same_day_duplicates_without_dropping(self):
+        df = pd.DataFrame({
+            'title': ['Engineer', 'engineer', 'Analyst'],
+            'postedCompany_name': ['ACME', 'ACME', 'ACME'],
+            'employmentTypes': ['Full-time', 'Full-time', 'Full-time'],
+            'positionLevels': ['Senior', 'Senior', 'Senior'],
+            'primary_category': ['IT', 'IT', 'IT'],
+            'salary_minimum': [3000, 3000, 4000],
+            'salary_maximum': [5000, 5000, 6000],
+            'numberOfVacancies': [1, 1, 1],
+            'metadata_newPostingDate': pd.to_datetime(['2026-01-01', '2026-01-01', '2026-01-01']),
+        })
+        result = flag_duplicates(df)
+        self.assertEqual(len(result), 3)
+        self.assertTrue(result.loc[0, 'is_same_day_dup'])
+        self.assertTrue(result.loc[1, 'is_same_day_dup'])
+        self.assertFalse(result.loc[2, 'is_same_day_dup'])
+        self.assertEqual(result.loc[0, 'dup_group_id'], result.loc[1, 'dup_group_id'])
 
 
 if __name__ == '__main__':
