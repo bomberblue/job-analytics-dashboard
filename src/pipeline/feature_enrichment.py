@@ -2,7 +2,7 @@
 Feature enrichment for the cleaned job dataset.
 
 Renames the cleaned dataset's source column names to the names used by ``src/pipeline/`` and the
-``jobs`` table, and derives the feature columns ``feature_engineer.py`` adds -- so a cleaned frame
+``jobs`` table, and derives feature columns like seniority bands and skill counts -- so a cleaned frame
 can feed the existing dashboard without a translation layer.
 
 Operates purely on DataFrames.  How the cleaned dataset was produced, stored, or loaded is the
@@ -34,7 +34,7 @@ This module does not model that judgement, only the outcome -- *which* columns a
 materialising is a property of the extract being cleaned, so it is the cleaning step that decides
 it and asserts on it.  Here it is simply a shorter column list.
 
-Two ``feature_engineer.py`` columns are deliberately NOT reproduced:
+Two columns that the original pipeline produced are deliberately NOT reproduced here:
 
 * ``days_posted`` -- it is ``now() - posting_date``, which measures when ingestion ran rather than
   any property of the posting, and would make the result change on every execution.
@@ -42,7 +42,7 @@ Two ``feature_engineer.py`` columns are deliberately NOT reproduced:
   present on the cleaned frame.
 * ``is_growth_role`` -- its definition (``count > median * 0.2``) marks essentially every role.
 
-Note that of everything ``feature_engineer.py`` computes, only ``seniority_years`` actually reaches
+Note that of all the features computed during enrichment, only ``seniority_years`` actually reaches
 the ``jobs`` table; ``columns_order`` in ``database_manager.py`` drops the rest at load time.  They
 are produced here anyway because the enriched frame is meant to be usable directly for analysis,
 not only as a database feed.
@@ -136,7 +136,7 @@ def band_salary(max_sal):
 
 
 def extract_skills_vectorised(text):
-    """Vectorised form of DataCleaner.extract_skills -- same boundary rule, one pass per skill.
+    """Extract skills from text using consistent boundary rule, one pass per skill in COMMON_SKILLS.
 
     Returns ``(skills_series, skill_count_array)``.
 
