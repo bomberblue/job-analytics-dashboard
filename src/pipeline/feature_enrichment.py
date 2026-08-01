@@ -76,6 +76,14 @@ COMMON_SKILLS = [
 ]
 
 # Cleaned dataset's source column name -> src/pipeline/ column name.
+#
+# posting_date deliberately comes from metadata_originalPostingDate (first-ever publish
+# date), not metadata_newPostingDate (latest repost date) -- using newPostingDate here
+# would cut ~5 months off the earliest date the dashboard can show. data_cleaning.py
+# still uses metadata_newPostingDate elsewhere (listing_days, the same-day duplicate key,
+# the date-logic assertion in validate()) -- that's intentional, not an inconsistency:
+# those checks care about the most recent listing activity, this column is about when the
+# role was first posted.
 RENAME_MAP = {
     'metadata_jobPostId':                 'job_id',
     'postedCompany_name':                 'company',

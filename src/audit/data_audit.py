@@ -129,7 +129,7 @@ class DataAudit:
                     print(f"     Common causes: Invalid salaries, duplicates, missing fields")
                 else:
                     print(f"  ✗ High data loss ({loss_pct:.1f}%)")
-                    print(f"     Recommend: Review cleaning logic in data_cleaner.py")
+                    print(f"     Recommend: Review cleaning logic in data_cleaning.py")
             
         except Exception as e:
             print(f"  ✗ Error comparing layers: {e}")

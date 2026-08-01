@@ -17,7 +17,7 @@ import json
 import numpy as np
 import pandas as pd
 
-SALARY_FLOOR = 500          # monthly SGD; at or below this a salary is a placeholder, not a wage
+SALARY_FLOOR = 500          # monthly SGD; below this a salary is a placeholder, not a wage
 SALARY_CEILING = 100_000    # monthly SGD; above this it is a data-entry error
 INTERN_STIPEND_FLOOR = 300  # monthly SGD; below SALARY_FLOOR but a plausible internship stipend
 SYNTHETIC_ID_RE = r'^RANDOM_JOB_'
