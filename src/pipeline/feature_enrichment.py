@@ -86,7 +86,7 @@ RENAME_MAP = {
     'minimumYearsExperience':             'seniority_years',
     'positionLevels':                     'position_level',
     'employmentTypes':                    'job_type',
-    'metadata_newPostingDate':            'posting_date',
+    'metadata_originalPostingDate':       'posting_date',
     'metadata_expiryDate':                'expiry_date',
     'metadata_totalNumberOfView':         'views',
     'metadata_totalNumberJobApplication': 'applications',

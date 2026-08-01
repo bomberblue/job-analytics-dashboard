@@ -6,8 +6,8 @@ graph TB
 
     subgraph "2. ETL Pipeline"
         PIPE["pipeline.py<br/>ORCHESTRATOR"]
-        CLEAN["data_cleaner.py<br/>CLEAN & STANDARDIZE<br/>• Parse salaries<br/>• Standardize text<br/>• Extract skills"]
-        FEAT["feature_engineer.py<br/>ENGINEER FEATURES<br/>• Salary bands<br/>• Seniority years<br/>• Competitiveness"]
+        CLEAN["data_cleaning.py<br/>CLEAN & STANDARDIZE<br/>• Parse salaries<br/>• Standardize text<br/>• Extract skills"]
+        FEAT["feature_enrichment.py<br/>ENGINEER FEATURES<br/>• Salary bands<br/>• Seniority years<br/>• Competitiveness"]
     end
 
     subgraph "3. Database Layer"
@@ -84,13 +84,13 @@ Dashboard renders metrics & charts
 
 ```
 ┌─ settings.py (Configuration)
-│   ├─ data_cleaner.py (uses salary thresholds, experience levels)
-│   ├─ feature_engineer.py (uses experience categories)
+│   ├─ data_cleaning.py (uses salary thresholds, experience levels)
+│   ├─ feature_enrichment.py (uses experience categories)
 │   └─ app.py (uses business metrics, sectors)
 │
 ├─ pipeline.py (Orchestrator)
-│   ├─ data_cleaner.py
-│   └─ feature_engineer.py
+│   ├─ data_cleaning.py
+│   └─ feature_enrichment.py
 │       └─ schema.py (DuckDB tables)
 │           └─ database_manager.py (Query builder)
 │

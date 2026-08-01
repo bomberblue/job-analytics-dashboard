@@ -284,8 +284,8 @@ FROM raw_jobs_flat;
                      ↓
 ┌─────────────────────────────────────────────────────┐
 │  Stage 2: Transform                                 │
-│  • DataCleaner.clean() — salary parsing, text std   │
-│  • FeatureEngineer.engineer_features() — enrich     │
+│  • clean_dataset() — salary parsing, text std       │
+│  • feature_enrichment() — enrich                    │
 │  (1500 records dropped: invalid/duplicates)         │
 └────────────────────┬────────────────────────────────┘
                      │

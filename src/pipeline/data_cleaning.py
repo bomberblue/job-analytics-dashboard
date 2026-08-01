@@ -3,9 +3,11 @@ Data cleaning for the raw SGJobData extract.
 
 Ported from notebooks/data_cleaning.ipynb, which documents the reasoning behind every
 threshold and decision here (docs/data-cleaning-report-generated.md is the generated
-report). The notebook imports these same functions and wraps each with its own
-before/after snapshot for that report; this module has no reporting responsibility of
-its own, only the transformations.
+report). The notebook worked out this cleaning logic originally and is left in place,
+unmodified, as historical documentation of that analysis - it does not import from this
+module and is not run as part of the pipeline. This module is now the sole formal source
+of truth for cleaning logic: any future changes to cleaning behavior belong here, not in
+the notebook.
 
 Pipeline order matters: junk rows first (so column statistics are computed on real
 postings), then structure, then values, then dtypes. See clean_dataset() for the order.
@@ -97,7 +99,7 @@ def split_categories(df):
     metadata_jobPostId, category_id, category - one row per (posting, category) pair.
     """
     df = df.copy()
-    parsed_cat = df['categories'].map(json.loads)
+    parsed_cat = df['categories'].apply(lambda v: json.loads(v) if pd.notna(v) else [])
     n_per_row = parsed_cat.map(len)
 
     job_category = (pd.DataFrame({'metadata_jobPostId': df['metadata_jobPostId'], 'c': parsed_cat})
@@ -254,7 +256,7 @@ def validate(df, check_dead_columns=True):
     """
     assert df['metadata_jobPostId'].is_unique, 'primary key is not unique'
     assert df['title'].notna().all(), 'ghost rows survived'
-    assert not df['metadata_jobPostId'].str.match(SYNTHETIC_ID_RE).any(), 'synthetic rows survived'
+    assert not df['metadata_jobPostId'].str.match(SYNTHETIC_ID_RE, na=False).any(), 'synthetic rows survived'
     ok_rows = df['salary_flag'] == 'ok'
     stipend_rows = df['salary_flag'] == 'low_stipend'
     outlier_rows = df['salary_flag'] == 'outlier'
@@ -271,7 +273,9 @@ def validate(df, check_dead_columns=True):
     assert undisclosed_rows.sum() == int(df['salary_maximum'].isna().sum()), \
         'nulled rows and undisclosed flag disagree'
     assert (df['salary_minimum'].isna() == df['salary_maximum'].isna()).all(), 'salary bounds nulled apart'
-    assert (df['metadata_expiryDate'] > df['metadata_newPostingDate']).all(), 'date logic violated'
+    comparable = df['metadata_expiryDate'].notna() & df['metadata_newPostingDate'].notna()
+    assert (df.loc[comparable, 'metadata_expiryDate'] > df.loc[comparable, 'metadata_newPostingDate']).all(), \
+        'date logic violated'
     if check_dead_columns:
         leaked = [c for c in DEAD_COLUMNS if c in df.columns]
         assert not leaked, f'dead columns present in the cleaned frame: {leaked}'

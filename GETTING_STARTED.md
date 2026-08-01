@@ -5,8 +5,8 @@ Your team project is now fully scaffolded and ready for development!
 ## 📋 What's Been Created
 
 ### 1. **Data Pipeline** (`src/pipeline/`)
-- **data_cleaner.py** — Cleans salary data, standardizes experience levels, extracts skills
-- **feature_engineer.py** — Creates salary bands, competitiveness scores, seniority years
+- **data_cleaning.py** — Cleans salary data, standardizes experience levels, extracts skills
+- **feature_enrichment.py** — Creates salary bands, competitiveness scores, seniority years
 - **pipeline.py** — Orchestrates ETL: Extract CSV → Clean → Engineer → Load to DuckDB
 
 ### 2. **Database Layer** (`src/database/`)
@@ -61,13 +61,13 @@ Helps job seekers understand **market opportunities**:
 ```
 SGJobData.csv (raw)
     ↓
-[DataCleaner]
+[data_cleaning.py]
     • Parse salaries ($3000-5000 → min:3000, max:5000)
     • Standardize experience levels (junior → Entry Level)
     • Extract skills (Python, SQL, AWS, etc.)
     • Remove duplicates & invalid records
     ↓
-[FeatureEngineer]
+[feature_enrichment.py]
     • Calculate salary midpoints & bands
     • Extract seniority years from experience text
     • Count required skills
@@ -188,7 +188,7 @@ Upon completion, your team will have:
 | "Module not found" error | Run from project root: `cd job-analytics-dashboard` |
 | Database is empty | Check pipeline ran without errors; verify SGJobData.csv exists |
 | Dashboard shows "No data" | Restart Streamlit; check DB connection in `app.py` |
-| Salary parsing fails | Adjust regex in `data_cleaner.py` if format differs |
+| Salary parsing fails | Adjust regex in `data_cleaning.py` if format differs |
 | Slow queries | Add indexes or use `LIMIT` clause for testing |
 
 ---

@@ -110,6 +110,20 @@ class TestSplitCategories(unittest.TestCase):
         self.assertEqual(cleaned['n_categories'].tolist(), [1, 0])
         self.assertEqual(len(job_category), 1)
 
+    def test_handles_null_categories_same_as_empty_array(self):
+        df = pd.DataFrame({
+            'metadata_jobPostId': ['MCF-1', 'MCF-2'],
+            'categories': [
+                json.dumps([{'id': 1, 'category': 'IT'}]),
+                None,
+            ],
+        })
+        cleaned, job_category = split_categories(df)
+        self.assertEqual(cleaned['primary_category'].tolist()[0], 'IT')
+        self.assertTrue(pd.isna(cleaned['primary_category'].iloc[1]))
+        self.assertEqual(cleaned['n_categories'].tolist(), [1, 0])
+        self.assertEqual(len(job_category), 1)
+
 
 class TestFixSalaries(unittest.TestCase):
     def _base_df(self, **overrides):
@@ -366,6 +380,21 @@ class TestValidateDeadColumns(unittest.TestCase):
     def test_raises_on_duplicate_primary_key(self):
         df = self._diverse_frame()
         df.loc[1, 'metadata_jobPostId'] = 'MCF-1'  # collide with row 0
+        with self.assertRaises(AssertionError):
+            validate(df, check_dead_columns=False)
+
+    def test_null_posting_date_does_not_trip_date_logic_check(self):
+        # A row with a missing metadata_newPostingDate can't have its date logic
+        # meaningfully checked - it shouldn't be treated as a violation. Without the
+        # comparable-rows guard, NaT > NaT (or any comparison with NaT) is False, so
+        # this row alone would fail the assertion even though nothing was violated.
+        df = self._diverse_frame()
+        df.loc[0, 'metadata_newPostingDate'] = pd.NaT
+        validate(df, check_dead_columns=False)  # must not raise
+
+    def test_raises_on_genuine_date_logic_violation(self):
+        df = self._diverse_frame()
+        df.loc[0, 'metadata_expiryDate'] = pd.Timestamp('2025-01-01')  # before posting date
         with self.assertRaises(AssertionError):
             validate(df, check_dead_columns=False)
 
