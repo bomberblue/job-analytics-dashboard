@@ -63,7 +63,8 @@ __all__ = [
     'schema_report',
 ]
 
-# Skill vocabulary and matching rule copied from src/pipeline/data_cleaner.py so the two agree.
+# Skill vocabulary and matching rule - kept in sync with the extract_skills_vectorised
+# boundary rule below (both use the same non-alphanumeric-boundary regex).
 COMMON_SKILLS = [
     'Python', 'Java', 'JavaScript', 'SQL', 'R', 'C++', 'Go', 'Rust',
     'React', 'Angular', 'Vue', 'Django', 'Flask', 'Spring',
@@ -113,10 +114,10 @@ def _bool(mask):
 
 
 def band_experience(years):
-    """Band numeric years of experience. Mirrors DataCleaner.standardize_experience_level.
+    """Band numeric years of experience: <=1 -> Entry Level, <=4 -> Mid Level, else Senior.
 
-    Missing years become "Unknown", matching the pipeline, which passes the raw (NaN-bearing)
-    column to that function.
+    Missing years become "Unknown", matching clean_dataset()'s cap_experience(), which
+    passes the raw (NaN-bearing) column here.
     """
     return pd.Series(
         np.select([_bool(years.isna()), _bool(years <= 1), _bool(years <= 4)],
@@ -125,7 +126,7 @@ def band_experience(years):
 
 
 def band_salary(max_sal):
-    """Band a salary maximum. Mirrors FeatureEngineer.create_salary_band."""
+    """Band a salary maximum: <3000 Entry, <5000 Mid, <8000 Senior, else Executive; NaN -> Unknown."""
     return pd.Series(
         np.select([_bool(max_sal.isna()), _bool(max_sal < 3000),
                    _bool(max_sal < 5000), _bool(max_sal < 8000)],
