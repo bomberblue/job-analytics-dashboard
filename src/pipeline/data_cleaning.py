@@ -113,3 +113,46 @@ def split_categories(df):
 
     print(f"  → Split categories JSON into a {len(job_category):,}-row bridge table")
     return df, job_category
+
+
+def fix_salaries(df):
+    """Null out placeholder salaries below SALARY_FLOOR (paired), flag - not null - anything
+    above SALARY_CEILING, and carve out plausible internship stipends from the floor rule."""
+    df = df.copy()
+    df['salary_minimum'] = df['salary_minimum'].astype('Int32')
+    df['salary_maximum'] = df['salary_maximum'].astype('Int32')
+
+    low_min = df['salary_minimum'] < SALARY_FLOOR
+    low_max = df['salary_maximum'] < SALARY_FLOOR
+    high_max = df['salary_maximum'] > SALARY_CEILING
+
+    is_internship = df['employmentTypes'] == 'Internship/Attachment'
+    intern_stipend = (is_internship
+                      & low_min & low_max
+                      & (df['salary_minimum'] >= INTERN_STIPEND_FLOOR)
+                      & (df['salary_maximum'] >= INTERN_STIPEND_FLOOR))
+
+    below_floor = (low_min | low_max) & ~intern_stipend
+
+    df.loc[below_floor, ['salary_minimum', 'salary_maximum']] = pd.NA
+    df['salary_flag'] = pd.Series(np.select(
+        [below_floor, intern_stipend, high_max],
+        ['undisclosed', 'low_stipend', 'outlier'],
+        default='ok',
+    ), index=df.index).astype('category')
+    df['average_salary'] = ((df['salary_minimum'] + df['salary_maximum']) / 2).astype('Float64')
+
+    print(f"  → Salary fix: {int(below_floor.sum()):,} nulled, "
+          f"{int(intern_stipend.sum())} internship stipends kept, "
+          f"{int(high_max.sum())} outliers flagged")
+    return df
+
+
+def cap_experience(df):
+    """Null out minimumYearsExperience values above EXPERIENCE_MAX (impossible values). 0 is kept."""
+    df = df.copy()
+    years = df['minimumYearsExperience']
+    impossible = years > EXPERIENCE_MAX
+    df['minimumYearsExperience'] = years.astype('Int16').mask(impossible, pd.NA)
+    print(f"  → Capped {int(impossible.sum())} impossible experience values")
+    return df

@@ -3,7 +3,7 @@ import json
 import unittest
 import pandas as pd
 
-from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories
+from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories, fix_salaries, cap_experience
 
 
 class TestRemoveGhostRows(unittest.TestCase):
@@ -109,6 +109,50 @@ class TestSplitCategories(unittest.TestCase):
         self.assertTrue(pd.isna(cleaned['primary_category'].iloc[1]))
         self.assertEqual(cleaned['n_categories'].tolist(), [1, 0])
         self.assertEqual(len(job_category), 1)
+
+
+class TestFixSalaries(unittest.TestCase):
+    def _base_df(self, **overrides):
+        base = {
+            'salary_minimum': [1, 3000, 150000],
+            'salary_maximum': [1, 5000, 200000],
+            'employmentTypes': ['Full-time', 'Full-time', 'Full-time'],
+        }
+        base.update(overrides)
+        return pd.DataFrame(base)
+
+    def test_nulls_placeholder_salaries(self):
+        result = fix_salaries(self._base_df())
+        self.assertTrue(pd.isna(result.loc[0, 'salary_minimum']))
+        self.assertEqual(result.loc[0, 'salary_flag'], 'undisclosed')
+
+    def test_flags_but_keeps_outliers(self):
+        result = fix_salaries(self._base_df())
+        self.assertEqual(result.loc[2, 'salary_maximum'], 200000)
+        self.assertEqual(result.loc[2, 'salary_flag'], 'outlier')
+
+    def test_keeps_plausible_internship_stipend(self):
+        df = pd.DataFrame({
+            'salary_minimum': [350],
+            'salary_maximum': [400],
+            'employmentTypes': ['Internship/Attachment'],
+        })
+        result = fix_salaries(df)
+        self.assertEqual(result.loc[0, 'salary_minimum'], 350)
+        self.assertEqual(result.loc[0, 'salary_flag'], 'low_stipend')
+
+    def test_ok_rows_keep_flag_ok(self):
+        result = fix_salaries(self._base_df())
+        self.assertEqual(result.loc[1, 'salary_flag'], 'ok')
+
+
+class TestCapExperience(unittest.TestCase):
+    def test_nulls_impossible_values_keeps_zero(self):
+        df = pd.DataFrame({'minimumYearsExperience': [0, 5, 500]})
+        result = cap_experience(df)
+        self.assertEqual(result.loc[0, 'minimumYearsExperience'], 0)
+        self.assertEqual(result.loc[1, 'minimumYearsExperience'], 5)
+        self.assertTrue(pd.isna(result.loc[2, 'minimumYearsExperience']))
 
 
 if __name__ == '__main__':
