@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import streamlit as st
-from config.settings import STREAMLIT_CONFIG, DB_FILE
+from config.settings import STREAMLIT_CONFIG, DB_FILE, RAW_CSV_PATH
 from src.database.database_manager import DatabaseManager
 from src.dashboard.hirer_view import render_hirer_view
 from src.dashboard.seeker_view import render_seeker_view
@@ -39,11 +39,13 @@ st.markdown("""
 
 
 def ensure_data():
-    """Download jobs.duckdb from R2 if it's missing (fresh Streamlit Cloud deploy)."""
+    """Download the raw CSV from R2 and run the pipeline if jobs.duckdb is missing
+    (fresh Streamlit Cloud deploy)."""
     if DB_FILE.exists():
         return
 
     import boto3
+    from src.pipeline.pipeline import DataPipeline
 
     client = boto3.client(
         "s3",
@@ -53,7 +55,10 @@ def ensure_data():
         region_name="auto",
     )
     with st.spinner("Downloading job data..."):
-        client.download_file(st.secrets["R2_BUCKET"], "jobs.duckdb", str(DB_FILE))
+        client.download_file(st.secrets["R2_BUCKET"], "SGJobData.csv", str(RAW_CSV_PATH))
+
+    with st.spinner("Building database..."):
+        DataPipeline().run()
 
 
 def initialize_session():
