@@ -1,8 +1,9 @@
 """Unit tests for src/pipeline/data_cleaning.py."""
+import json
 import unittest
 import pandas as pd
 
-from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns
+from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories
 
 
 class TestRemoveGhostRows(unittest.TestCase):
@@ -48,6 +49,42 @@ class TestPruneDeadColumns(unittest.TestCase):
         })
         result = prune_dead_columns(df)
         self.assertEqual(list(result.columns), ['title'])
+
+
+class TestParseDates(unittest.TestCase):
+    def test_converts_to_datetime_losslessly(self):
+        df = pd.DataFrame({
+            'metadata_newPostingDate': ['2026-01-01'],
+            'metadata_originalPostingDate': ['2026-01-01'],
+            'metadata_expiryDate': ['2026-02-01'],
+        })
+        result = parse_dates(df)
+        self.assertEqual(result['metadata_newPostingDate'].dtype.kind, 'M')
+
+    def test_refuses_lossy_conversion(self):
+        df = pd.DataFrame({
+            'metadata_newPostingDate': ['not-a-date'],
+            'metadata_originalPostingDate': ['2026-01-01'],
+            'metadata_expiryDate': ['2026-02-01'],
+        })
+        with self.assertRaises(AssertionError):
+            parse_dates(df)
+
+
+class TestSplitCategories(unittest.TestCase):
+    def test_explodes_categories_and_keeps_primary(self):
+        df = pd.DataFrame({
+            'metadata_jobPostId': ['MCF-1', 'MCF-2'],
+            'categories': [
+                json.dumps([{'id': 1, 'category': 'IT'}, {'id': 2, 'category': 'Engineering'}]),
+                json.dumps([{'id': 3, 'category': 'Finance'}]),
+            ],
+        })
+        cleaned, job_category = split_categories(df)
+        self.assertEqual(cleaned['primary_category'].tolist(), ['IT', 'Finance'])
+        self.assertEqual(cleaned['n_categories'].tolist(), [2, 1])
+        self.assertEqual(len(job_category), 3)
+        self.assertNotIn('categories', cleaned.columns)
 
 
 if __name__ == '__main__':

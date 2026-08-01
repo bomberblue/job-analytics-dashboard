@@ -68,3 +68,45 @@ def prune_dead_columns(df):
     constant_cols = [c for c in df.columns if c not in empty_cols and df[c].nunique(dropna=True) <= 1]
     print(f"  → Dropping {len(empty_cols)} empty and {len(constant_cols)} zero-variance columns")
     return df.drop(columns=empty_cols + constant_cols)
+
+
+DATE_COLS = ['metadata_newPostingDate', 'metadata_originalPostingDate', 'metadata_expiryDate']
+
+
+def parse_dates(df):
+    """Convert DATE_COLS from str to datetime64, refusing any column where the round trip is lossy."""
+    df = df.copy()
+    for c in DATE_COLS:
+        original = df[c]
+        parsed = pd.to_datetime(original, errors='coerce')
+        unparsed = int(parsed.isna().sum() - original.isna().sum())
+        lossless = bool((parsed.dt.strftime('%Y-%m-%d') == original).all())
+        assert unparsed == 0 and lossless, f'{c} would lose data - refusing to convert'
+        df[c] = parsed
+    print(f"  → Parsed {len(DATE_COLS)} date columns")
+    return df
+
+
+def split_categories(df):
+    """Explode the categories JSON column into a (job posting, category) bridge table.
+
+    Returns (df, job_category). df gains primary_category (first category) and
+    n_categories; the categories column is dropped. job_category has columns
+    metadata_jobPostId, category_id, category - one row per (posting, category) pair.
+    """
+    df = df.copy()
+    parsed_cat = df['categories'].map(json.loads)
+    n_per_row = parsed_cat.map(len)
+
+    job_category = (pd.DataFrame({'metadata_jobPostId': df['metadata_jobPostId'], 'c': parsed_cat})
+                      .explode('c', ignore_index=True))
+    job_category['category_id'] = job_category['c'].map(lambda d: d['id']).astype('int16')
+    job_category['category'] = job_category['c'].map(lambda d: d['category']).astype('category')
+    job_category = job_category.drop(columns='c')
+
+    df['primary_category'] = parsed_cat.map(lambda v: v[0]['category'])
+    df['n_categories'] = n_per_row.astype('int8')
+    df = df.drop(columns='categories')
+
+    print(f"  → Split categories JSON into a {len(job_category):,}-row bridge table")
+    return df, job_category
