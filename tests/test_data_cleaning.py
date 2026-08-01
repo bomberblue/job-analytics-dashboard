@@ -3,7 +3,7 @@ import json
 import unittest
 import pandas as pd
 
-from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories, fix_salaries, cap_experience, normalize_text, add_derived_columns, flag_duplicates
+from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories, fix_salaries, cap_experience, normalize_text, add_derived_columns, flag_duplicates, downcast_dtypes, validate, clean_dataset
 
 
 class TestRemoveGhostRows(unittest.TestCase):
@@ -234,6 +234,140 @@ class TestFlagDuplicates(unittest.TestCase):
         self.assertTrue(result.loc[1, 'is_same_day_dup'])
         self.assertFalse(result.loc[2, 'is_same_day_dup'])
         self.assertEqual(result.loc[0, 'dup_group_id'], result.loc[1, 'dup_group_id'])
+
+
+class TestDowncastDtypes(unittest.TestCase):
+    def test_downcasts_and_categoricalizes(self):
+        df = pd.DataFrame({
+            'minimumYearsExperience': [1, 2],
+            'metadata_repostCount': [0, 1],
+            'numberOfVacancies': [1, 2],
+            'metadata_totalNumberOfView': [10, 20],
+            'metadata_totalNumberJobApplication': [1, 2],
+            'listing_days': [10, 20],
+            'n_categories': [1, 2],
+            'employmentTypes': ['Full-time', 'Full-time'],
+            'positionLevels': ['Senior', 'Senior'],
+            'status_jobStatus': ['Open', 'Open'],
+            'postedCompany_name': ['ACME', 'ACME'],
+            'primary_category': ['IT', 'IT'],
+            'source': ['MCF', 'MCF'],
+        })
+        result = downcast_dtypes(df)
+        self.assertEqual(str(result['minimumYearsExperience'].dtype), 'Int8')
+        self.assertEqual(str(result['employmentTypes'].dtype), 'category')
+
+    def test_handles_null_listing_days(self):
+        # add_derived_columns() builds listing_days as nullable Int16 because a null date
+        # produces a null listing_days - downcast_dtypes must not crash on that pd.NA the
+        # way a plain .astype('int16') would (IntCastingNaNError).
+        df = pd.DataFrame({
+            'minimumYearsExperience': [1, 2],
+            'metadata_repostCount': [0, 1],
+            'numberOfVacancies': [1, 2],
+            'metadata_totalNumberOfView': [10, 20],
+            'metadata_totalNumberJobApplication': [1, 2],
+            'listing_days': pd.array([10, pd.NA], dtype='Int16'),
+            'n_categories': [1, 2],
+            'employmentTypes': ['Full-time', 'Full-time'],
+            'positionLevels': ['Senior', 'Senior'],
+            'status_jobStatus': ['Open', 'Open'],
+            'postedCompany_name': ['ACME', 'ACME'],
+            'primary_category': ['IT', 'IT'],
+            'source': ['MCF', 'MCF'],
+        })
+        result = downcast_dtypes(df)
+        self.assertEqual(str(result['listing_days'].dtype), 'Int16')
+        self.assertTrue(pd.isna(result['listing_days'].iloc[1]))
+
+
+class TestCleanDataset(unittest.TestCase):
+    """clean_dataset() end to end. IMPORTANT: prune_dead_columns() drops any column with
+    <= 1 distinct value across the frame - with too few rows or repeated values, it will
+    wrongly strip columns the rest of the pipeline needs (a 1-row frame makes EVERY column
+    look zero-variance). So this fixture uses 2 rows with a genuinely distinct value in
+    every column except the two deliberately constant ones (occupationId, salary_type),
+    which are the ones meant to be pruned.
+
+    check_dead_columns=False is passed deliberately: even with 2 diverse rows, derived
+    columns like `source` (both rows use an MCF- job id here) will still be constant by
+    chance, which is a sample-size artifact, not a bug - see TestValidateDeadColumns
+    below, which tests that specific check in isolation with a fixture built to exercise
+    it correctly.
+    """
+
+    def _raw_frame(self):
+        return pd.DataFrame([
+            {
+                'metadata_jobPostId': 'MCF-1', 'title': 'Data Engineer',
+                'postedCompany_name': 'ACME', 'salary_minimum': 4000, 'salary_maximum': 6000,
+                'employmentTypes': 'Full-time', 'positionLevels': 'Senior',
+                'categories': json.dumps([{'id': 1, 'category': 'Information Technology'}]),
+                'metadata_newPostingDate': '2026-01-01', 'metadata_originalPostingDate': '2026-01-01',
+                'metadata_expiryDate': '2026-02-01',
+                'minimumYearsExperience': 5, 'metadata_repostCount': 0, 'numberOfVacancies': 1,
+                'metadata_totalNumberOfView': 10, 'metadata_totalNumberJobApplication': 1,
+                'status_jobStatus': 'Open', 'occupationId': None, 'salary_type': 'Monthly',
+            },
+            {
+                'metadata_jobPostId': 'MCF-2', 'title': 'Business Analyst',
+                'postedCompany_name': 'BETA CORP', 'salary_minimum': 3000, 'salary_maximum': 4500,
+                'employmentTypes': 'Part-time', 'positionLevels': 'Junior',
+                'categories': json.dumps([{'id': 2, 'category': 'Finance'}]),
+                'metadata_newPostingDate': '2026-01-05', 'metadata_originalPostingDate': '2026-01-05',
+                'metadata_expiryDate': '2026-02-10',
+                'minimumYearsExperience': 1, 'metadata_repostCount': 2, 'numberOfVacancies': 3,
+                'metadata_totalNumberOfView': 25, 'metadata_totalNumberJobApplication': 4,
+                'status_jobStatus': 'Closed', 'occupationId': None, 'salary_type': 'Monthly',
+            },
+        ])
+
+    def test_runs_end_to_end(self):
+        cleaned, job_category = clean_dataset(self._raw_frame(), check_dead_columns=False)
+        self.assertEqual(len(cleaned), 2)
+        self.assertIn('dup_group_id', cleaned.columns)
+        self.assertIn('salary_flag', cleaned.columns)
+        self.assertEqual(len(job_category), 2)
+        # the two genuinely dead columns must not survive
+        for col in ['occupationId', 'salary_type']:
+            self.assertNotIn(col, cleaned.columns)
+        # columns that must survive despite there being only 2 rows
+        for col in ['title', 'postedCompany_name', 'employmentTypes', 'positionLevels']:
+            self.assertIn(col, cleaned.columns)
+
+
+class TestValidateDeadColumns(unittest.TestCase):
+    """validate()'s check_dead_columns re-scan, tested directly against a hand-built,
+    already-cleaned-shaped frame. clean_dataset() itself can't reliably exercise this with
+    a tiny fixture, because the check depends on real diversity (e.g. an ATS-sourced row
+    existing at all) that a 2-row synthetic frame won't reliably have - see the docstring
+    on TestCleanDataset above. Testing validate() directly sidesteps that entirely.
+    """
+
+    def _diverse_frame(self):
+        return pd.DataFrame({
+            'metadata_jobPostId': ['MCF-1', 'MCF-2', 'ATS-3'],
+            'title': ['Engineer', 'Engineer', 'Chef'],
+            'salary_minimum': pd.array([3000, 3500, pd.NA], dtype='Int32'),
+            'salary_maximum': pd.array([5000, 5500, pd.NA], dtype='Int32'),
+            'salary_flag': pd.Series(['ok', 'ok', 'undisclosed'], dtype='category'),
+            'employmentTypes': ['Full-time', 'Part-time', 'Contract'],
+            'metadata_newPostingDate': pd.to_datetime(['2026-01-01', '2026-01-02', '2026-01-03']),
+            'metadata_expiryDate': pd.to_datetime(['2026-02-01', '2026-02-02', '2026-02-03']),
+            'dup_group_id': [0, 0, 1],
+            'dup_group_size': [2, 2, 1],
+            'is_same_day_dup': [True, True, False],
+            'source': ['MCF', 'MCF', 'ATS'],
+        })
+
+    def test_passes_on_a_diverse_frame(self):
+        validate(self._diverse_frame(), check_dead_columns=True)  # must not raise
+
+    def test_raises_on_duplicate_primary_key(self):
+        df = self._diverse_frame()
+        df.loc[1, 'metadata_jobPostId'] = 'MCF-1'  # collide with row 0
+        with self.assertRaises(AssertionError):
+            validate(df, check_dead_columns=False)
 
 
 if __name__ == '__main__':

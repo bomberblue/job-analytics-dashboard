@@ -211,3 +211,96 @@ def flag_duplicates(df):
     print(f"  → Flagged {int(df['is_same_day_dup'].sum()):,} same-day duplicate rows "
           f"in {int(df.loc[df['is_same_day_dup'], 'dup_group_id'].nunique()):,} groups")
     return df
+
+
+# listing_days is 'Int16' (nullable), not 'int16': add_derived_columns() builds it with
+# .astype('Int16') because a null metadata_newPostingDate/metadata_expiryDate produces a
+# null listing_days, and a plain int16 cast can't hold NA.
+DOWNCAST = {'minimumYearsExperience': 'Int8', 'metadata_repostCount': 'int8',
+            'numberOfVacancies': 'int16', 'metadata_totalNumberOfView': 'int32',
+            'metadata_totalNumberJobApplication': 'int32', 'listing_days': 'Int16',
+            'n_categories': 'int8'}
+CATEGORICAL = ['employmentTypes', 'positionLevels', 'status_jobStatus',
+               'postedCompany_name', 'primary_category', 'source']
+
+
+def downcast_dtypes(df):
+    """Downcast integer columns and convert low-cardinality text columns to category,
+    asserting each downcast is safe against the observed range first."""
+    df = df.copy()
+    for c, t in DOWNCAST.items():
+        lo, hi = df[c].min(), df[c].max()
+        int_limits = np.iinfo(np.dtype(t.lower()))
+        assert lo >= int_limits.min and hi <= int_limits.max, f'{c} range [{lo},{hi}] does not fit {t}'
+        df[c] = df[c].astype(t)
+    for c in CATEGORICAL:
+        df[c] = df[c].astype('category')
+    print("  → Downcast integer columns and converted text columns to category")
+    return df
+
+
+def validate(df, check_dead_columns=True):
+    """Assert the post-conditions every cleaning step is supposed to guarantee. Raises
+    AssertionError with a specific message if any is violated.
+
+    check_dead_columns re-scans for zero-variance columns after cleaning. It is only
+    meaningful on a representative sample of the real data: a small or bounded extract
+    can trip it by chance - e.g. an ATS-sourced posting (source == 'ATS') simply hasn't
+    appeared yet in the first few thousand rows of the real CSV, so `source` looks
+    constant there even though it is not in the full dataset. Callers validating a
+    bounded extract (DataPipeline.run(nrows=...), or a small test fixture) should pass
+    False; the unbounded, full-dataset run (nrows=None) - the only case this check is
+    meant to guard - leaves it True.
+    """
+    assert df['metadata_jobPostId'].is_unique, 'primary key is not unique'
+    assert df['title'].notna().all(), 'ghost rows survived'
+    assert not df['metadata_jobPostId'].str.match(SYNTHETIC_ID_RE).any(), 'synthetic rows survived'
+    ok_rows = df['salary_flag'] == 'ok'
+    stipend_rows = df['salary_flag'] == 'low_stipend'
+    outlier_rows = df['salary_flag'] == 'outlier'
+    undisclosed_rows = df['salary_flag'] == 'undisclosed'
+    assert df.loc[ok_rows, 'salary_maximum'].between(SALARY_FLOOR, SALARY_CEILING).all(), 'salary max out of range'
+    assert df.loc[ok_rows, 'salary_minimum'].between(SALARY_FLOOR, SALARY_CEILING).all(), 'salary min out of range'
+    assert df.loc[stipend_rows, 'salary_maximum'].between(INTERN_STIPEND_FLOOR, SALARY_FLOOR).all(), \
+        'stipend carve-out out of range'
+    assert (df.loc[stipend_rows, 'employmentTypes'] == 'Internship/Attachment').all(), \
+        'stipend carve-out leaked outside internships'
+    assert (df.loc[outlier_rows, 'salary_maximum'] > SALARY_CEILING).all(), \
+        'outlier flag set on a row that is not actually over the ceiling'
+    assert df.loc[outlier_rows, 'salary_maximum'].notna().all(), 'outlier rows were nulled instead of flagged'
+    assert undisclosed_rows.sum() == int(df['salary_maximum'].isna().sum()), \
+        'nulled rows and undisclosed flag disagree'
+    assert (df['salary_minimum'].isna() == df['salary_maximum'].isna()).all(), 'salary bounds nulled apart'
+    assert (df['metadata_expiryDate'] > df['metadata_newPostingDate']).all(), 'date logic violated'
+    if check_dead_columns:
+        leaked = [c for c in DEAD_COLUMNS if c in df.columns]
+        assert not leaked, f'dead columns present in the cleaned frame: {leaked}'
+        still_dead = [c for c in df.columns if df[c].nunique(dropna=True) <= 1 or _all_blank(df[c])]
+        assert not still_dead, f'zero-variance or blank columns survived to the cleaned frame: {still_dead}'
+
+
+def clean_dataset(df, check_dead_columns=True):
+    """Run the full cleaning pipeline on a raw SGJobData frame (as read straight from CSV).
+
+    Returns (cleaned_df, job_category) - cleaned_df uses the raw source column names,
+    job_category is the (job posting, category) bridge table exploded from the categories
+    JSON column. Pass cleaned_df to feature_enrichment() to align it to JOBS_SCHEMA.
+
+    check_dead_columns is forwarded to validate() - see its docstring for why a bounded
+    or small test extract should pass False.
+    """
+    print("🧹 Cleaning dataset...")
+    df = remove_ghost_rows(df)
+    df = remove_synthetic_rows(df)
+    df = prune_dead_columns(df)
+    df = parse_dates(df)
+    df, job_category = split_categories(df)
+    df = fix_salaries(df)
+    df = cap_experience(df)
+    df = normalize_text(df)
+    df = add_derived_columns(df)
+    df = flag_duplicates(df)
+    df = downcast_dtypes(df)
+    validate(df, check_dead_columns=check_dead_columns)
+    print(f"✅ Cleaning complete: {len(df):,} rows")
+    return df, job_category
