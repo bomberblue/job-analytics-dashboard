@@ -3,7 +3,8 @@ import json
 import unittest
 import pandas as pd
 
-from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories, fix_salaries, cap_experience, normalize_text, add_derived_columns, flag_duplicates, downcast_dtypes, validate, clean_dataset
+from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories, fix_salaries, cap_experience, normalize_text, add_derived_columns, flag_duplicates, downcast_dtypes, validate, assert_no_dead_columns, clean_dataset
+from tests.fixtures import two_row_raw_frame
 
 
 class TestRemoveGhostRows(unittest.TestCase):
@@ -296,48 +297,13 @@ class TestDowncastDtypes(unittest.TestCase):
 
 
 class TestCleanDataset(unittest.TestCase):
-    """clean_dataset() end to end. IMPORTANT: prune_dead_columns() drops any column with
-    <= 1 distinct value across the frame - with too few rows or repeated values, it will
-    wrongly strip columns the rest of the pipeline needs (a 1-row frame makes EVERY column
-    look zero-variance). So this fixture uses 2 rows with a genuinely distinct value in
-    every column except the two deliberately constant ones (occupationId, salary_type),
-    which are the ones meant to be pruned.
-
-    check_dead_columns=False is passed deliberately: even with 2 diverse rows, derived
-    columns like `source` (both rows use an MCF- job id here) will still be constant by
-    chance, which is a sample-size artifact, not a bug - see TestValidateDeadColumns
-    below, which tests that specific check in isolation with a fixture built to exercise
-    it correctly.
+    """clean_dataset() end to end, on the shared two_row_raw_frame() fixture (see
+    tests/fixtures.py for why it needs 2 diverse rows, and why the dead-columns re-scan
+    isn't exercised here).
     """
 
-    def _raw_frame(self):
-        return pd.DataFrame([
-            {
-                'metadata_jobPostId': 'MCF-1', 'title': 'Data Engineer',
-                'postedCompany_name': 'ACME', 'salary_minimum': 4000, 'salary_maximum': 6000,
-                'employmentTypes': 'Full-time', 'positionLevels': 'Senior',
-                'categories': json.dumps([{'id': 1, 'category': 'Information Technology'}]),
-                'metadata_newPostingDate': '2026-01-01', 'metadata_originalPostingDate': '2026-01-01',
-                'metadata_expiryDate': '2026-02-01',
-                'minimumYearsExperience': 5, 'metadata_repostCount': 0, 'numberOfVacancies': 1,
-                'metadata_totalNumberOfView': 10, 'metadata_totalNumberJobApplication': 1,
-                'status_jobStatus': 'Open', 'occupationId': None, 'salary_type': 'Monthly',
-            },
-            {
-                'metadata_jobPostId': 'MCF-2', 'title': 'Business Analyst',
-                'postedCompany_name': 'BETA CORP', 'salary_minimum': 3000, 'salary_maximum': 4500,
-                'employmentTypes': 'Part-time', 'positionLevels': 'Junior',
-                'categories': json.dumps([{'id': 2, 'category': 'Finance'}]),
-                'metadata_newPostingDate': '2026-01-05', 'metadata_originalPostingDate': '2026-01-05',
-                'metadata_expiryDate': '2026-02-10',
-                'minimumYearsExperience': 1, 'metadata_repostCount': 2, 'numberOfVacancies': 3,
-                'metadata_totalNumberOfView': 25, 'metadata_totalNumberJobApplication': 4,
-                'status_jobStatus': 'Closed', 'occupationId': None, 'salary_type': 'Monthly',
-            },
-        ])
-
     def test_runs_end_to_end(self):
-        cleaned, job_category = clean_dataset(self._raw_frame(), check_dead_columns=False)
+        cleaned, job_category = clean_dataset(two_row_raw_frame())
         self.assertEqual(len(cleaned), 2)
         self.assertIn('dup_group_id', cleaned.columns)
         self.assertIn('salary_flag', cleaned.columns)
@@ -351,11 +317,13 @@ class TestCleanDataset(unittest.TestCase):
 
 
 class TestValidateDeadColumns(unittest.TestCase):
-    """validate()'s check_dead_columns re-scan, tested directly against a hand-built,
-    already-cleaned-shaped frame. clean_dataset() itself can't reliably exercise this with
-    a tiny fixture, because the check depends on real diversity (e.g. an ATS-sourced row
-    existing at all) that a 2-row synthetic frame won't reliably have - see the docstring
-    on TestCleanDataset above. Testing validate() directly sidesteps that entirely.
+    """assert_no_dead_columns()'s zero-variance re-scan, tested directly against a
+    hand-built, already-cleaned-shaped frame. clean_dataset() itself can't reliably
+    exercise this with a tiny fixture, because the check depends on real diversity (e.g.
+    an ATS-sourced row existing at all) that a 2-row synthetic frame won't reliably have -
+    see the docstring on TestCleanDataset above. Testing it directly sidesteps that
+    entirely. The other tests in this class exercise validate()'s unconditional checks
+    (primary key uniqueness, date logic) using the same diverse fixture for convenience.
     """
 
     def _diverse_frame(self):
@@ -375,13 +343,13 @@ class TestValidateDeadColumns(unittest.TestCase):
         })
 
     def test_passes_on_a_diverse_frame(self):
-        validate(self._diverse_frame(), check_dead_columns=True)  # must not raise
+        assert_no_dead_columns(self._diverse_frame())  # must not raise
 
     def test_raises_on_duplicate_primary_key(self):
         df = self._diverse_frame()
         df.loc[1, 'metadata_jobPostId'] = 'MCF-1'  # collide with row 0
         with self.assertRaises(AssertionError):
-            validate(df, check_dead_columns=False)
+            validate(df)
 
     def test_null_posting_date_does_not_trip_date_logic_check(self):
         # A row with a missing metadata_newPostingDate can't have its date logic
@@ -390,13 +358,13 @@ class TestValidateDeadColumns(unittest.TestCase):
         # this row alone would fail the assertion even though nothing was violated.
         df = self._diverse_frame()
         df.loc[0, 'metadata_newPostingDate'] = pd.NaT
-        validate(df, check_dead_columns=False)  # must not raise
+        validate(df)  # must not raise
 
     def test_raises_on_genuine_date_logic_violation(self):
         df = self._diverse_frame()
         df.loc[0, 'metadata_expiryDate'] = pd.Timestamp('2025-01-01')  # before posting date
         with self.assertRaises(AssertionError):
-            validate(df, check_dead_columns=False)
+            validate(df)
 
 
 if __name__ == '__main__':

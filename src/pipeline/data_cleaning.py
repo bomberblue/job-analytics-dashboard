@@ -23,17 +23,6 @@ INTERN_STIPEND_FLOOR = 300  # monthly SGD; below SALARY_FLOOR but a plausible in
 SYNTHETIC_ID_RE = r'^RANDOM_JOB_'
 EXPERIENCE_MAX = 100        # years; above this the value is not physically possible
 
-# JOBS_SCHEMA columns that are dead in this extract - src/pipeline/feature_enrichment.py
-# excludes these from JOBS_SCHEMA_COLUMNS for the same reason.
-DEAD_COLUMNS = {
-    'location': 'the extract is Singapore-only - zero variance',
-    'salary_currency': "restates salary_type, itself constant 'Monthly' here and dropped by prune_dead_columns",
-    'description': 'the source CSV has no description field at all',
-    'requirements': 'the source CSV has no requirements field at all',
-    'created_at': 'records when the pipeline ran, not a property of the posting; '
-                  'DatabaseManager.insert_jobs stamps it at insert time',
-}
-
 
 def _all_blank(s):
     """True if every value is NaN or an empty / whitespace-only string - a column with no content."""
@@ -54,14 +43,14 @@ def remove_ghost_rows(df):
     ghost = (na_per_row == len(text_cols)) & (df[num_cols].fillna(0) == 0).all(axis=1)
 
     print(f"  → Removing {int(ghost.sum()):,} ghost rows (structurally empty)")
-    return df.loc[~ghost].copy()
+    return df.loc[~ghost]
 
 
 def remove_synthetic_rows(df):
     """Drop generated test rows whose metadata_jobPostId matches SYNTHETIC_ID_RE."""
     synthetic = df['metadata_jobPostId'].str.match(SYNTHETIC_ID_RE, na=False)
     print(f"  → Removing {int(synthetic.sum())} synthetic test rows")
-    return df.loc[~synthetic].copy()
+    return df.loc[~synthetic]
 
 
 def prune_dead_columns(df):
@@ -241,18 +230,11 @@ def downcast_dtypes(df):
     return df
 
 
-def validate(df, check_dead_columns=True):
-    """Assert the post-conditions every cleaning step is supposed to guarantee. Raises
-    AssertionError with a specific message if any is violated.
-
-    check_dead_columns re-scans for zero-variance columns after cleaning. It is only
-    meaningful on a representative sample of the real data: a small or bounded extract
-    can trip it by chance - e.g. an ATS-sourced posting (source == 'ATS') simply hasn't
-    appeared yet in the first few thousand rows of the real CSV, so `source` looks
-    constant there even though it is not in the full dataset. Callers validating a
-    bounded extract (DataPipeline.run(nrows=...), or a small test fixture) should pass
-    False; the unbounded, full-dataset run (nrows=None) - the only case this check is
-    meant to guard - leaves it True.
+def validate(df):
+    """Assert the post-conditions every cleaning step is supposed to guarantee, other than
+    the sample-size-dependent zero-variance re-scan (see assert_no_dead_columns() for that
+    one, and why it's separate). Raises AssertionError with a specific message if any
+    invariant here is violated.
     """
     assert df['metadata_jobPostId'].is_unique, 'primary key is not unique'
     assert df['title'].notna().all(), 'ghost rows survived'
@@ -276,22 +258,33 @@ def validate(df, check_dead_columns=True):
     comparable = df['metadata_expiryDate'].notna() & df['metadata_newPostingDate'].notna()
     assert (df.loc[comparable, 'metadata_expiryDate'] > df.loc[comparable, 'metadata_newPostingDate']).all(), \
         'date logic violated'
-    if check_dead_columns:
-        leaked = [c for c in DEAD_COLUMNS if c in df.columns]
-        assert not leaked, f'dead columns present in the cleaned frame: {leaked}'
-        still_dead = [c for c in df.columns if df[c].nunique(dropna=True) <= 1 or _all_blank(df[c])]
-        assert not still_dead, f'zero-variance or blank columns survived to the cleaned frame: {still_dead}'
 
 
-def clean_dataset(df, check_dead_columns=True):
+def assert_no_dead_columns(df):
+    """Re-scan for zero-variance or blank columns after cleaning. Raises AssertionError if
+    any survived.
+
+    Only meaningful on a representative sample of the real data: a small or bounded
+    extract can trip it by chance - e.g. an ATS-sourced posting (source == 'ATS') simply
+    hasn't appeared yet in the first few thousand rows of the real CSV, so `source` looks
+    constant there even though it is not in the full dataset. Call this only against an
+    unbounded, full-dataset run (DataPipeline.run(nrows=None)) - never against a bounded
+    extract or a small test fixture.
+    """
+    still_dead = [c for c in df.columns if df[c].nunique(dropna=True) <= 1 or _all_blank(df[c])]
+    assert not still_dead, f'zero-variance or blank columns survived to the cleaned frame: {still_dead}'
+
+
+def clean_dataset(df):
     """Run the full cleaning pipeline on a raw SGJobData frame (as read straight from CSV).
 
     Returns (cleaned_df, job_category) - cleaned_df uses the raw source column names,
     job_category is the (job posting, category) bridge table exploded from the categories
     JSON column. Pass cleaned_df to feature_enrichment() to align it to JOBS_SCHEMA.
 
-    check_dead_columns is forwarded to validate() - see its docstring for why a bounded
-    or small test extract should pass False.
+    Does not call assert_no_dead_columns() - see its docstring for why that check only
+    makes sense against the full, unbounded dataset. Callers running the full pipeline
+    (DataPipeline.run(nrows=None)) should call it themselves on the returned cleaned_df.
     """
     print("🧹 Cleaning dataset...")
     df = remove_ghost_rows(df)
@@ -305,6 +298,6 @@ def clean_dataset(df, check_dead_columns=True):
     df = add_derived_columns(df)
     df = flag_duplicates(df)
     df = downcast_dtypes(df)
-    validate(df, check_dead_columns=check_dead_columns)
+    validate(df)
     print(f"✅ Cleaning complete: {len(df):,} rows")
     return df, job_category

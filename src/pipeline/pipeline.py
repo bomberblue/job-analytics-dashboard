@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.pipeline.data_cleaning import clean_dataset
+from src.pipeline.data_cleaning import clean_dataset, assert_no_dead_columns
 from src.pipeline.feature_enrichment import feature_enrichment, JOBS_SCHEMA_COLUMNS
 from src.database.database_manager import DatabaseManager
 from src.database.schema import initialize_database
@@ -68,9 +68,11 @@ class DataPipeline:
         self.load_raw(df.copy())
 
         print("\n🧹 STAGE 2: Cleaning and enriching data...")
-        # check_dead_columns is only meaningful on the full dataset (nrows=None) - see
-        # clean_dataset()'s docstring. A bounded/test extract skips just that one check.
-        cleaned, job_category = clean_dataset(df, check_dead_columns=(nrows is None))
+        cleaned, job_category = clean_dataset(df)
+        if nrows is None:
+            # Only meaningful on the full dataset - see assert_no_dead_columns()'s
+            # docstring for why a bounded/test extract must not run this check.
+            assert_no_dead_columns(cleaned)
         enriched = feature_enrichment(cleaned, job_category=job_category)
 
         success = self.load_processed(enriched)
