@@ -16,8 +16,8 @@ BUSINESS CASE:
 /job-analytics-dashboard/
 ├── src/                      [SOURCE CODE]
 │   ├── pipeline/            → ETL: Extract, Clean, Transform
-│   │   ├── data_cleaner.py     • Salary parsing, text standardization
-│   │   ├── feature_engineer.py • Salary bands, competitiveness scores
+│   │   ├── data_cleaning.py     • Salary parsing, text standardization
+│   │   ├── feature_enrichment.py • Salary bands, competitiveness scores
 │   │   └── pipeline.py         • Orchestrates end-to-end ETL
 │   ├── database/            → Database layer
 │   │   ├── schema.py           • DuckDB table definitions
@@ -109,9 +109,9 @@ SEEKER VIEW (🔍 Job Search Focus)
 
 CSV Data (raw)
     ↓
-[DataCleaner] → Salary parsing, text standardization, skill extraction
+[data_cleaning.py] → Salary parsing, text standardization, skill extraction
     ↓
-[FeatureEngineer] → Salary bands, seniority years, competitiveness
+[feature_enrichment.py] → Salary bands, seniority years, competitiveness
     ↓
 [DuckDB Schema] → jobs, benchmarks, trends, skills_demand tables
     ↓

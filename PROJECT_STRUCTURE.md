@@ -11,8 +11,8 @@ job-analytics-dashboard/
 │   └── processed/           # DuckDB database files
 ├── src/
 │   ├── pipeline/           # ETL pipeline
-│   │   ├── data_cleaner.py      # Data cleaning logic
-│   │   ├── feature_engineer.py  # Feature engineering
+│   │   ├── data_cleaning.py      # Data cleaning logic
+│   │   ├── feature_enrichment.py # Feature engineering
 │   │   └── pipeline.py          # Pipeline orchestrator
 │   ├── database/           # Database layer
 │   │   ├── schema.py            # DuckDB schema definitions
@@ -62,10 +62,9 @@ python src/pipeline/pipeline.py
 ```
 
 This will:
-- ✓ Load and sample the data
-- ✓ Clean missing values, standardize fields
-- ✓ Extract skills and categorize experience levels
-- ✓ Engineer analytical features
+- ✓ Load the raw CSV
+- ✓ Drop ghost/synthetic rows, fix salary sentinels, normalize text, flag duplicates
+- ✓ Rename columns to the schema, categorize experience levels, extract skills
 - ✓ Load into DuckDB
 
 ### 4. Launch Dashboard
@@ -124,20 +123,17 @@ Helps job seekers understand market opportunities and benchmark their value.
 
 ### Processing Steps
 
-1. **Data Cleaning** (`src/pipeline/data_cleaner.py`)
-   - Handle missing values
-   - Parse salary ranges (extract min/max from string formats)
-   - Standardize text fields (sectors, experience levels)
-   - Remove duplicates
-   - Extract technical skills via pattern matching
+1. **Data Cleaning** (`src/pipeline/data_cleaning.py`)
+   - Drop ghost rows (structurally empty) and synthetic test rows
+   - Null out placeholder salaries below a floor, flag statistical outliers
+   - Normalize title/company text, strip zero-width characters
+   - Flag same-day duplicate postings (doesn't drop them)
 
-2. **Feature Engineering** (`src/pipeline/feature_engineer.py`)
+2. **Feature Enrichment** (`src/pipeline/feature_enrichment.py`)
+   - Rename columns to match the `jobs` table schema
+   - Categorize experience levels, extract technical skills via pattern matching
    - Calculate salary midpoints and bands
-   - Categorize experience levels
-   - Count required skills
-   - Identify growth roles
    - Compute competitiveness scores
-   - Calculate skill premiums (salary impact)
 
 3. **Database Loading** (`src/database/database_manager.py`)
    - Insert into DuckDB schema
@@ -258,7 +254,7 @@ Deployment options:
 A: Currently manual. Automate via scheduled tasks for production.
 
 **Q: Can I add more data sources?**  
-A: Yes! Extend `data_cleaner.py` to handle new CSV formats.
+A: Yes! Extend `data_cleaning.py` to handle new CSV formats.
 
 **Q: How do I add new metrics?**  
 A: Add queries to `database_manager.py` and new dashboard sections to `app.py`.

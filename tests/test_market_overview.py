@@ -47,7 +47,11 @@ class TestFetchHeadlineMetrics(unittest.TestCase):
         self.assertEqual(list(df.columns), ['total_postings', 'median_pay'])
         self.assertEqual(len(df), 1)
         self.assertGreater(df.iloc[0]['total_postings'], 0)
-        self.assertLessEqual(df.iloc[0]['total_postings'], 1026079)
+        # total_postings is a filtered view of the raw layer, so it can never exceed the
+        # raw row count - a live bound instead of a hardcoded one that rots when the
+        # pipeline's row count changes.
+        raw_count = self.db.query("SELECT COUNT(*) AS count FROM raw_jobs_flat").iloc[0]['count']
+        self.assertLessEqual(df.iloc[0]['total_postings'], raw_count)
         self.assertGreater(df.iloc[0]['median_pay'], 0)
 
     def test_sector_filter_reduces_total(self):
@@ -162,8 +166,9 @@ class TestFetchSeasonality(unittest.TestCase):
 
     def test_years_included_reflects_data_coverage(self):
         df = fetch_seasonality(self.db)
-        # Under the Oct 2022 - May 2024 range, June-September only occur in one
-        # year (2023); October-May occur in two (2022/2023 or 2023/2024).
+        # Under the Oct 2022 - May 2024 range (posting_date runs 2022-10-03 to 2024-05-29),
+        # June-September only occur in one year (2023); October-May occur in two
+        # (2022/2023 or 2023/2024).
         self.assertTrue((df['years_included'] >= 1).all())
         self.assertTrue((df['years_included'] <= 2).all())
 
