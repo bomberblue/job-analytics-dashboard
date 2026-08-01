@@ -80,7 +80,9 @@ def parse_dates(df):
         original = df[c]
         parsed = pd.to_datetime(original, errors='coerce')
         unparsed = int(parsed.isna().sum() - original.isna().sum())
-        lossless = bool((parsed.dt.strftime('%Y-%m-%d') == original).all())
+        both_null = original.isna() & parsed.isna()
+        matches = (parsed.dt.strftime('%Y-%m-%d') == original) | both_null
+        lossless = bool(matches.all())
         assert unparsed == 0 and lossless, f'{c} would lose data - refusing to convert'
         df[c] = parsed
     print(f"  → Parsed {len(DATE_COLS)} date columns")
@@ -100,11 +102,12 @@ def split_categories(df):
 
     job_category = (pd.DataFrame({'metadata_jobPostId': df['metadata_jobPostId'], 'c': parsed_cat})
                       .explode('c', ignore_index=True))
+    job_category = job_category.dropna(subset=['c'])
     job_category['category_id'] = job_category['c'].map(lambda d: d['id']).astype('int16')
     job_category['category'] = job_category['c'].map(lambda d: d['category']).astype('category')
     job_category = job_category.drop(columns='c')
 
-    df['primary_category'] = parsed_cat.map(lambda v: v[0]['category'])
+    df['primary_category'] = parsed_cat.map(lambda v: v[0]['category'] if v else None)
     df['n_categories'] = n_per_row.astype('int8')
     df = df.drop(columns='categories')
 

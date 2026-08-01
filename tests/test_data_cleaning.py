@@ -70,6 +70,16 @@ class TestParseDates(unittest.TestCase):
         with self.assertRaises(AssertionError):
             parse_dates(df)
 
+    def test_handles_legitimate_nulls(self):
+        df = pd.DataFrame({
+            'metadata_newPostingDate': ['2026-01-01', None],
+            'metadata_originalPostingDate': ['2026-01-01', None],
+            'metadata_expiryDate': ['2026-02-01', None],
+        })
+        result = parse_dates(df)
+        self.assertEqual(result['metadata_newPostingDate'].dtype.kind, 'M')
+        self.assertTrue(pd.isna(result['metadata_newPostingDate'].iloc[1]))
+
 
 class TestSplitCategories(unittest.TestCase):
     def test_explodes_categories_and_keeps_primary(self):
@@ -85,6 +95,20 @@ class TestSplitCategories(unittest.TestCase):
         self.assertEqual(cleaned['n_categories'].tolist(), [2, 1])
         self.assertEqual(len(job_category), 3)
         self.assertNotIn('categories', cleaned.columns)
+
+    def test_handles_empty_categories_array(self):
+        df = pd.DataFrame({
+            'metadata_jobPostId': ['MCF-1', 'MCF-2'],
+            'categories': [
+                json.dumps([{'id': 1, 'category': 'IT'}]),
+                json.dumps([]),
+            ],
+        })
+        cleaned, job_category = split_categories(df)
+        self.assertEqual(cleaned['primary_category'].tolist()[0], 'IT')
+        self.assertTrue(pd.isna(cleaned['primary_category'].iloc[1]))
+        self.assertEqual(cleaned['n_categories'].tolist(), [1, 0])
+        self.assertEqual(len(job_category), 1)
 
 
 if __name__ == '__main__':
