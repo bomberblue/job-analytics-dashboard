@@ -4,3 +4,4 @@ streamlit>=1.28.0
 numpy>=1.24.0
 plotly>=5.17.0
 pyarrow>=13.0.0
+boto3>=1.28.0
