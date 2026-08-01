@@ -181,7 +181,7 @@ def normalize_text(df):
 def add_derived_columns(df):
     """Add listing_days, is_repost and source. No values are imputed - zeros are left as-is."""
     df = df.copy()
-    df['listing_days'] = (df['metadata_expiryDate'] - df['metadata_newPostingDate']).dt.days.astype('int16')
+    df['listing_days'] = (df['metadata_expiryDate'] - df['metadata_newPostingDate']).dt.days.astype('Int16')
     df['is_repost'] = df['metadata_repostCount'] > 0
     df['source'] = df['metadata_jobPostId'].str.extract(r'^([A-Za-z]+)')[0]
     print("  → Added listing_days, is_repost, source")

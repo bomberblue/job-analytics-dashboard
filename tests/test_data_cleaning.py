@@ -201,6 +201,19 @@ class TestAddDerivedColumns(unittest.TestCase):
         self.assertTrue(bool(result.loc[0, 'is_repost']))
         self.assertEqual(result.loc[0, 'source'], 'MCF')
 
+    def test_handles_null_dates_gracefully(self):
+        df = pd.DataFrame({
+            'metadata_newPostingDate': pd.to_datetime(['2026-01-01', None, '2026-01-01']),
+            'metadata_expiryDate': pd.to_datetime(['2026-01-15', '2026-02-01', None]),
+            'metadata_repostCount': [2, 0, 1],
+            'metadata_jobPostId': ['MCF-123', 'ATS-456', 'JOB-789'],
+        })
+        result = add_derived_columns(df)
+        self.assertEqual(result.loc[0, 'listing_days'], 14)
+        self.assertTrue(pd.isna(result.loc[1, 'listing_days']))
+        self.assertTrue(pd.isna(result.loc[2, 'listing_days']))
+        self.assertEqual(result['listing_days'].dtype.name, 'Int16')
+
 
 class TestFlagDuplicates(unittest.TestCase):
     def test_flags_same_day_duplicates_without_dropping(self):
