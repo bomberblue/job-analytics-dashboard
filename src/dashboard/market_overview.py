@@ -315,9 +315,174 @@ def render_seasonality(db, sector=None, position_level=None):
     )
 
 
+# Postings before this date are the platform's early onboarding ramp (Oct 2022 -
+# Feb 2023 averaged under 6k postings/month platform-wide, vs 19k+ from March 2023
+# on). Left in, that ramp would be mistaken for a real early-period baseline by
+# any analysis comparing an early window to a later one.
+WAGE_DECOMPOSITION_START_DATE = '2023-03-01'
+
+# Minimum postings a sector/position-level segment needs in BOTH the early and
+# late window to be included, so a handful of rare segments can't swing the total.
+MIN_SEGMENT_SIZE = 50
+
+
+def _ramp_excluded_where(sector=None, position_level=None):
+    """build_where_clause's filters, plus the onboarding ramp excluded."""
+    return build_where_clause(sector, position_level) + \
+        f" AND posting_date >= '{WAGE_DECOMPOSITION_START_DATE}'"
+
+
+def fetch_wage_decomposition(db, sector=None, position_level=None):
+    """
+    Split the pay change between the earliest and latest 3 months of data into
+    two parts: real wage growth within the same sector/position-level segments
+    (the "within" effect), versus the market simply posting more of its higher-
+    or lower-paying segments (the "mix" effect).
+
+    Method: hold segment weights fixed at the early window's mix, and price
+    them at the late window's pay rates ("late_pay_at_early_mix"). The gap from
+    actual_early to that bridge value is pure wage movement; the gap from the
+    bridge value to actual_late is pure mix movement. The two always sum
+    exactly to the headline change.
+    """
+    where = _ramp_excluded_where(sector, position_level)
+    sql = f"""
+        WITH filtered AS (
+            SELECT sector, position_level, strftime(posting_date, '%Y-%m') AS ym,
+                   (salary_min + salary_max) / 2.0 AS pay
+            FROM jobs
+            {where}
+        ),
+        all_months AS (SELECT DISTINCT ym FROM filtered),
+        early_months AS (SELECT ym FROM all_months ORDER BY ym ASC LIMIT 3),
+        late_months AS (SELECT ym FROM all_months ORDER BY ym DESC LIMIT 3),
+        segment AS (
+            SELECT
+                sector, position_level,
+                AVG(pay) FILTER (WHERE ym IN (SELECT ym FROM early_months)) AS pay_early,
+                AVG(pay) FILTER (WHERE ym IN (SELECT ym FROM late_months))  AS pay_late,
+                COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM early_months)) AS n_early,
+                COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM late_months))  AS n_late
+            FROM filtered
+            GROUP BY sector, position_level
+        ),
+        valid AS (
+            SELECT * FROM segment
+            WHERE n_early >= {MIN_SEGMENT_SIZE} AND n_late >= {MIN_SEGMENT_SIZE}
+        )
+        SELECT
+            (SELECT MIN(ym) FROM early_months) || ' to ' || (SELECT MAX(ym) FROM early_months) AS early_window_label,
+            (SELECT MIN(ym) FROM late_months)  || ' to ' || (SELECT MAX(ym) FROM late_months)  AS late_window_label,
+            COUNT(*)::INTEGER AS n_segments,
+            SUM(n_early)::INTEGER AS n_early_total,
+            SUM(n_late)::INTEGER AS n_late_total,
+            SUM(pay_early * n_early) / NULLIF(SUM(n_early), 0) AS actual_early,
+            SUM(pay_late  * n_late)  / NULLIF(SUM(n_late), 0)  AS actual_late,
+            SUM(pay_late  * n_early) / NULLIF(SUM(n_early), 0) AS late_pay_at_early_mix
+        FROM valid
+    """
+    return db.query(sql)
+
+
+def fetch_sector_mix_shift(db, position_level=None, limit=8):
+    """
+    Return the sectors whose share of postings changed the most between the
+    early and late windows used by fetch_wage_decomposition. This is the detail
+    behind that function's "mix effect": a sector gaining share pulls overall
+    pay toward its own pay level even when nobody's individual wage moved.
+    """
+    where = _ramp_excluded_where(sector=None, position_level=position_level)
+    sql = f"""
+        WITH filtered AS (
+            SELECT sector, strftime(posting_date, '%Y-%m') AS ym
+            FROM jobs
+            {where}
+        ),
+        all_months AS (SELECT DISTINCT ym FROM filtered),
+        early_months AS (SELECT ym FROM all_months ORDER BY ym ASC LIMIT 3),
+        late_months AS (SELECT ym FROM all_months ORDER BY ym DESC LIMIT 3),
+        totals AS (
+            SELECT
+                COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM early_months)) AS total_early,
+                COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM late_months))  AS total_late
+            FROM filtered
+        )
+        SELECT
+            sector,
+            COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM early_months)) * 100.0
+                / NULLIF((SELECT total_early FROM totals), 0) AS share_early_pct,
+            COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM late_months)) * 100.0
+                / NULLIF((SELECT total_late FROM totals), 0) AS share_late_pct
+        FROM filtered
+        GROUP BY sector
+    """
+    df = db.query(sql)
+    if df.empty:
+        return df
+    df['share_change_pct'] = df['share_late_pct'] - df['share_early_pct']
+    return (
+        df.reindex(df['share_change_pct'].abs().sort_values(ascending=False).index)
+        .head(limit)
+        .reset_index(drop=True)
+    )
+
+
+def render_wage_decomposition(db, sector=None, position_level=None):
+    """Render the wage-growth decomposition and, for the unfiltered view, the
+    sector share shifts behind its mix effect."""
+    result = fetch_wage_decomposition(db, sector, position_level)
+    st.subheader("Wage Growth: Real Increase vs. Market Mix Shift")
+
+    row = result.iloc[0] if not result.empty else None
+    if row is None or pd.isna(row['actual_early']) or row['n_segments'] == 0:
+        st.info(
+            f"Not enough data in this selection to decompose wage growth (each "
+            f"sector/position-level segment needs at least {MIN_SEGMENT_SIZE} "
+            f"postings in both the earliest and latest 3-month windows)."
+        )
+        return
+
+    total_change = row['actual_late'] - row['actual_early']
+    within_effect = row['late_pay_at_early_mix'] - row['actual_early']
+    mix_effect = row['actual_late'] - row['late_pay_at_early_mix']
+
+    st.caption(
+        f"Comparing {row['early_window_label']} to {row['late_window_label']}, "
+        f"across {int(row['n_segments'])} sector x position-level segments "
+        f"({int(row['n_early_total']):,} and {int(row['n_late_total']):,} postings)."
+    )
+    create_metric_columns({
+        "Headline Pay Change": format_currency(total_change),
+        "From Real Wage Growth": format_currency(within_effect),
+        "From Market Mix Shift": format_currency(mix_effect),
+    })
+    st.caption(
+        "Real wage growth is the pay change within the same sector and position "
+        "level. Market mix shift is the effect of the market posting relatively "
+        "more (or fewer) jobs in higher- or lower-paying segments - it can mask "
+        "or exaggerate the headline number even when nobody's actual pay moved."
+    )
+
+    if sector is not None:
+        st.caption('Sector mix-shift detail is shown only for "All Sectors".')
+        return
+
+    shift_df = fetch_sector_mix_shift(db, position_level)
+    if shift_df.empty:
+        return
+    st.caption("Sectors with the biggest change in share of postings:")
+    display_df = shift_df.copy()
+    for col in ['share_early_pct', 'share_late_pct', 'share_change_pct']:
+        display_df[col] = display_df[col].apply(format_percentage)
+    create_comparison_table(
+        display_df,
+        columns_to_show=['sector', 'share_early_pct', 'share_late_pct', 'share_change_pct']
+    )
+
+
 def render_market_overview_view():
     """
-    Render the board's own header, filters, and all five sections. Composable
+    Render the board's own header, filters, and all six sections. Composable
     entry point for a shell that already has session state set up (e.g.
     app.py) — matches render_hirer_view()/render_seeker_view()'s
     zero-argument calling convention and self-contained header style.
@@ -333,6 +498,8 @@ def render_market_overview_view():
     render_industry_momentum(db, sector, position_level)
     st.divider()
     render_salary_trend(db, sector, position_level)
+    st.divider()
+    render_wage_decomposition(db, sector, position_level)
     st.divider()
     render_category_rankings(db, sector, position_level)
     st.divider()
