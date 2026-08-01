@@ -255,6 +255,44 @@ def render_category_rankings(db, sector=None, position_level=None):
             st.bar_chart(levels.set_index('position_level')['postings'], use_container_width=True)
 
 
+def fetch_employment_type_mix(db, sector=None, position_level=None):
+    """Return job types ranked by posting count, with median pay for each:
+    columns job_type, postings, median_pay."""
+    where = build_where_clause(sector, position_level)
+    sql = f"""
+        SELECT
+            job_type,
+            COUNT(*) AS postings,
+            ROUND(MEDIAN((salary_min + salary_max) / 2.0)) AS median_pay
+        FROM jobs
+        {where} AND job_type IS NOT NULL
+        GROUP BY job_type
+        ORDER BY postings DESC
+    """
+    return db.query(sql)
+
+
+def render_employment_type_mix(db, sector=None, position_level=None):
+    """Render the employment type breakdown: volume and median pay per type."""
+    df = fetch_employment_type_mix(db, sector, position_level)
+    st.subheader("Employment Type Mix")
+    if df.empty:
+        st.info("No postings match the current filters.")
+        return
+
+    # Pin postings-desc as the shared category order for both charts, or
+    # Vega-Lite defaults to alphabetical (matches render_category_rankings).
+    df['job_type'] = pd.Categorical(df['job_type'], categories=df['job_type'], ordered=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.caption("By postings")
+        st.bar_chart(df.set_index('job_type')['postings'], use_container_width=True)
+    with col2:
+        st.caption("By median pay")
+        st.bar_chart(df.set_index('job_type')['median_pay'], use_container_width=True)
+
+
 _MONTH_NAMES = [
     None, "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
@@ -427,6 +465,65 @@ def fetch_sector_mix_shift(db, position_level=None, limit=8):
     )
 
 
+# Keyword match on company name, used only to flag likely staffing/recruitment
+# agencies for the concentration caveat below - not a verified employer registry,
+# so treat matches as "looks like an agency," not a confirmed classification.
+_AGENCY_NAME_PATTERN = (
+    r'RECRUIT|STAFFING|MANPOWER|\bHR\b|HUMAN RESOURCE|TALENT|CONSULTANC|'
+    r'EMPLOYMENT|OUTSOURC|HEADHUNT|PLACEMENT|ADVISORY'
+)
+
+
+def fetch_top_companies(db, sector=None, position_level=None, limit=10):
+    """Return the top companies by posting count, each with its share of all
+    postings in the current filter: columns company, postings, share_pct."""
+    where = build_where_clause(sector, position_level)
+    sql = f"""
+        WITH ranked AS (
+            SELECT company, COUNT(*) AS postings
+            FROM jobs
+            {where}
+            GROUP BY company
+            ORDER BY postings DESC
+            LIMIT {int(limit)}
+        )
+        SELECT company, postings, postings * 100.0 / (SELECT COUNT(*) FROM jobs {where}) AS share_pct
+        FROM ranked
+    """
+    return db.query(sql)
+
+
+def render_market_concentration(db, sector=None, position_level=None):
+    """Render the top-companies table and the total share they hold, flagging
+    which look like staffing/recruitment agencies rather than direct employers."""
+    df = fetch_top_companies(db, sector, position_level)
+    st.subheader("Market Concentration: Top Companies")
+    if df.empty:
+        st.info("No postings match the current filters.")
+        return
+
+    df['likely_agency'] = df['company'].str.contains(_AGENCY_NAME_PATTERN, case=False, regex=True)
+    total_share = df['share_pct'].sum()
+    agency_share = df.loc[df['likely_agency'], 'share_pct'].sum()
+
+    create_metric_columns({
+        "Top 10 Companies' Share": format_percentage(total_share),
+        "...of which, likely agencies": format_percentage(agency_share),
+    })
+    st.caption(
+        "\"Likely agency\" is a name match (e.g. containing \"Recruit\", \"Staffing\", "
+        "\"Advisory\"), not a verified list. When most of a top employer's volume is "
+        "staffing agencies, that ranking reflects posting activity, not who is actually "
+        "hiring - a useful caveat anywhere else in the dashboard that surfaces \"top companies.\""
+    )
+    display_df = df.copy()
+    display_df['share_pct'] = display_df['share_pct'].apply(format_percentage)
+    create_comparison_table(
+        display_df,
+        columns_to_show=['company', 'postings', 'share_pct', 'likely_agency']
+    )
+
+
 def render_wage_decomposition(db, sector=None, position_level=None):
     """Render the wage-growth decomposition and, for the unfiltered view, the
     sector share shifts behind its mix effect."""
@@ -482,7 +579,7 @@ def render_wage_decomposition(db, sector=None, position_level=None):
 
 def render_market_overview_view():
     """
-    Render the board's own header, filters, and all six sections. Composable
+    Render the board's own header, filters, and all eight sections. Composable
     entry point for a shell that already has session state set up (e.g.
     app.py) — matches render_hirer_view()/render_seeker_view()'s
     zero-argument calling convention and self-contained header style.
@@ -503,7 +600,11 @@ def render_market_overview_view():
     st.divider()
     render_category_rankings(db, sector, position_level)
     st.divider()
+    render_employment_type_mix(db, sector, position_level)
+    st.divider()
     render_seasonality(db, sector, position_level)
+    st.divider()
+    render_market_concentration(db, sector, position_level)
 
 
 def main():
