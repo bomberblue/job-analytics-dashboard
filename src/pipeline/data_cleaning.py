@@ -156,3 +156,23 @@ def cap_experience(df):
     df['minimumYearsExperience'] = years.astype('Int16').mask(impossible, pd.NA)
     print(f"  → Capped {int(impossible.sum())} impossible experience values")
     return df
+
+
+INVISIBLE = '[' + ''.join(map(chr, [0x200B, 0x200E, 0x200F, 0x2060, 0xFEFF])) + ']'
+
+
+def _repair(s):
+    """Drop zero-width characters, collapse whitespace runs, trim the ends."""
+    return (s.str.replace(INVISIBLE, '', regex=True)
+             .str.replace(r'\s+', ' ', regex=True)
+             .str.strip())
+
+
+def normalize_text(df):
+    """Repair title and postedCompany_name in place: strip zero-width chars, collapse
+    whitespace. postedCompany_name is also upper-cased to merge its one casing outlier."""
+    df = df.copy()
+    df['title'] = _repair(df['title'])
+    df['postedCompany_name'] = _repair(df['postedCompany_name'].str.upper())
+    print("  → Normalized title and postedCompany_name text")
+    return df

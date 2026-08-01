@@ -3,7 +3,7 @@ import json
 import unittest
 import pandas as pd
 
-from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories, fix_salaries, cap_experience
+from src.pipeline.data_cleaning import remove_ghost_rows, remove_synthetic_rows, prune_dead_columns, parse_dates, split_categories, fix_salaries, cap_experience, normalize_text
 
 
 class TestRemoveGhostRows(unittest.TestCase):
@@ -165,6 +165,27 @@ class TestCapExperience(unittest.TestCase):
         self.assertEqual(result.loc[0, 'minimumYearsExperience'], 0)
         self.assertEqual(result.loc[1, 'minimumYearsExperience'], 5)
         self.assertTrue(pd.isna(result.loc[2, 'minimumYearsExperience']))
+
+
+class TestNormalizeText(unittest.TestCase):
+    def test_strips_whitespace_and_zero_width_chars(self):
+        # Built via chr(), not a literal embedded character - invisible characters typed
+        # directly into source are unverifiable by eye and fragile across editors/encodings.
+        zero_width_title = chr(0x200B) + 'ACCOUNTS ASSISTANT'
+        df = pd.DataFrame({
+            'title': ['  Chef  ', zero_width_title],
+            'postedCompany_name': ['acme  pte ltd', 'Church of Our Saviour'],
+        })
+        result = normalize_text(df)
+        self.assertEqual(result.loc[0, 'title'], 'Chef')
+        self.assertEqual(result.loc[1, 'title'], 'ACCOUNTS ASSISTANT')
+        self.assertEqual(result.loc[0, 'postedCompany_name'], 'ACME PTE LTD')
+
+    def test_preserves_emoji_zero_width_joiner(self):
+        zwj_text = 'Chef' + chr(0x200D) + 'Baker'
+        df = pd.DataFrame({'title': [zwj_text], 'postedCompany_name': ['Acme']})
+        result = normalize_text(df)
+        self.assertIn(chr(0x200D), result.loc[0, 'title'])
 
 
 if __name__ == '__main__':
