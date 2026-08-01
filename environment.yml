@@ -14,3 +14,4 @@ dependencies:
     - streamlit>=1.28.0
     - plotly>=5.17.0
     - pyarrow>=13.0.0
+    - boto3>=1.28.0
