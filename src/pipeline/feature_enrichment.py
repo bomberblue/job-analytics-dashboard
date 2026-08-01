@@ -42,10 +42,10 @@ Two columns that the original pipeline produced are deliberately NOT reproduced 
   present on the cleaned frame.
 * ``is_growth_role`` -- its definition (``count > median * 0.2``) marks essentially every role.
 
-Note that of all the features computed during enrichment, only ``seniority_years`` actually reaches
-the ``jobs`` table; ``columns_order`` in ``database_manager.py`` drops the rest at load time.  They
-are produced here anyway because the enriched frame is meant to be usable directly for analysis,
-not only as a database feed.
+The extra columns computed here (``salary_band``, ``skill_count``, ``competitiveness_score``) are
+not part of the ``jobs`` table schema — ``columns_order`` in ``database_manager.py`` filters them out
+at load time.  They are produced here anyway because the enriched frame is meant to be usable
+directly for analysis, not only as a database feed.
 """
 import re
 
