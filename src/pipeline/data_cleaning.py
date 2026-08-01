@@ -122,15 +122,15 @@ def fix_salaries(df):
     df['salary_minimum'] = df['salary_minimum'].astype('Int32')
     df['salary_maximum'] = df['salary_maximum'].astype('Int32')
 
-    low_min = df['salary_minimum'] < SALARY_FLOOR
-    low_max = df['salary_maximum'] < SALARY_FLOOR
-    high_max = df['salary_maximum'] > SALARY_CEILING
+    low_min = (df['salary_minimum'] < SALARY_FLOOR).fillna(True)
+    low_max = (df['salary_maximum'] < SALARY_FLOOR).fillna(True)
+    high_max = (df['salary_maximum'] > SALARY_CEILING).fillna(False)
 
     is_internship = df['employmentTypes'] == 'Internship/Attachment'
     intern_stipend = (is_internship
                       & low_min & low_max
-                      & (df['salary_minimum'] >= INTERN_STIPEND_FLOOR)
-                      & (df['salary_maximum'] >= INTERN_STIPEND_FLOOR))
+                      & (df['salary_minimum'] >= INTERN_STIPEND_FLOOR).fillna(False)
+                      & (df['salary_maximum'] >= INTERN_STIPEND_FLOOR).fillna(False))
 
     below_floor = (low_min | low_max) & ~intern_stipend
 

@@ -145,6 +145,18 @@ class TestFixSalaries(unittest.TestCase):
         result = fix_salaries(self._base_df())
         self.assertEqual(result.loc[1, 'salary_flag'], 'ok')
 
+    def test_nulls_missing_salaries_treated_as_undisclosed(self):
+        df = pd.DataFrame({
+            'salary_minimum': [None],
+            'salary_maximum': [None],
+            'employmentTypes': ['Full-time'],
+        })
+        result = fix_salaries(df)
+        self.assertTrue(pd.isna(result.loc[0, 'salary_minimum']))
+        self.assertTrue(pd.isna(result.loc[0, 'salary_maximum']))
+        self.assertEqual(result.loc[0, 'salary_flag'], 'undisclosed')
+        self.assertTrue(pd.isna(result.loc[0, 'average_salary']))
+
 
 class TestCapExperience(unittest.TestCase):
     def test_nulls_impossible_values_keeps_zero(self):
