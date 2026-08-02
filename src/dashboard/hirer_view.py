@@ -62,18 +62,17 @@ def _config_panel() -> dict:
 def _layer1_note() -> None:
     """Scope note for posting-time measures, valid across the whole market."""
     st.caption(
-        f"Based on all {data_loader.cohort_sizes()['market']:,} postings (duplicates "
-        "removed), Mar 2023 – May 2024."
+        f"All {data_loader.cohort_sizes()['market']:,} postings "
+        "(duplicates removed), Mar 2023 – May 2024."
     )
 
 
 def _layer2_note() -> None:
     """Scope note for engagement measures, which only a narrow cohort supports."""
     st.caption(
-        f"Based on {data_loader.cohort_sizes()['first_cycle']:,} first-cycle 30-day "
-        "postings from Mar–Jun 2023 — the only window where application and view "
-        "counts finished accumulating. All sectors combined; the sector choice "
-        "above does not filter this tab."
+        f"{data_loader.cohort_sizes()['first_cycle']:,} first-cycle 30-day postings, "
+        "Mar–Jun 2023 — the only window with complete view and application counts. "
+        "All sectors; the sector filter does not apply here."
     )
 
 
@@ -223,9 +222,11 @@ SECTIONS = (
 
 
 def render_hirer_view():
-    """Render hirer-focused dashboard."""
-    st.header("👔 Hirer's Dashboard")
+    """Render hirer-focused dashboard.
 
+    No board-level header: the view switch above already names it, and the
+    heading cost enough vertical space to push the taller charts off-screen.
+    """
     cfg = _config_panel()
 
     # on_change="rerun" makes tab bodies lazy: only the selected tab renders,

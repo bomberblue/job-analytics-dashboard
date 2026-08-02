@@ -25,9 +25,17 @@ GRID = '#e8e8e6'
 TRACK = '#ececeb'
 
 
+MAX_FIG_HEIGHT = 5.0   # inches; ~550px, so a chart still fits a laptop viewport
+
+
 def _new_axes(figsize: tuple) -> tuple:
     fig = Figure(figsize=figsize, dpi=110, layout='tight')
     return fig, fig.add_subplot()
+
+
+def _heatmap_size(n_rows: int) -> tuple:
+    """Grow with row count but stop before the chart needs scrolling."""
+    return (10, min(.6 * n_rows + 1.6, MAX_FIG_HEIGHT))
 
 
 def _style(ax, grid_axis: str = 'y') -> None:
@@ -83,7 +91,7 @@ def salary_range_bar(bench: dict, planned: float | None = None) -> Figure:
 
 
 def norms_heatmap(norms: pd.DataFrame, highlight: tuple | None = None) -> Figure:
-    fig, ax = _new_axes((10, .6 * len(norms) + 1.6))
+    fig, ax = _new_axes(_heatmap_size(len(norms)))
     sns.heatmap(
         norms, annot=True, fmt='.1f', cmap='Blues', vmin=0, ax=ax,
         linewidths=.5, linecolor='white', annot_kws={'size': 8},
@@ -145,7 +153,7 @@ def funnel_scatter(funnel: pd.DataFrame) -> Figure:
 
 
 def repost_heatmap(rates: pd.DataFrame, highlight: tuple | None = None) -> Figure:
-    fig, ax = _new_axes((10, .6 * len(rates) + 1.6))
+    fig, ax = _new_axes(_heatmap_size(len(rates)))
     # Scale to the observed range rather than anchoring at zero: no cell falls
     # below ~6%, so a zero floor spends a quarter of the ramp on empty space
     # and flattens the contrast between bands.
