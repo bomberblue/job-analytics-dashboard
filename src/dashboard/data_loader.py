@@ -108,6 +108,15 @@ def _benchmark(frame: pd.DataFrame, keys: list) -> pd.DataFrame:
 GRAIN_NAMES = {'sector': 'sector', 'position_level': 'level',
                'experience_level': 'experience'}
 
+# The order in which dimensions are surrendered when a cell is too thin.
+# Experience goes first: position_level already encodes seniority, so it is the
+# most redundant of the three. Sector goes next. position_level is held longest
+# because it separates pay far more sharply than industry does -- an
+# Executive-across-all-sectors benchmark still means something, whereas a
+# whole-sector one blends fresh grads with managers and quotes a spread too wide
+# to price against.
+DROP_ORDER = ['experience_level', 'sector', 'position_level']
+
 
 @st.cache_data
 def _benchmark_table(keys: tuple) -> pd.DataFrame:
@@ -131,9 +140,10 @@ def salary_lookup(sector: str | None = None, position_level: str | None = None,
 
     Any dimension may be None, meaning "don't narrow on this" -- the benchmark
     is then computed across that whole dimension rather than filtered to one
-    value. Degradation drops experience first and falls back to all postings,
-    the ladder layer 1 s.3 uses. The grain is always reported so the hirer can
-    see how specific the comparison actually is.
+    value. Degradation surrenders one dimension at a time in DROP_ORDER, so
+    every rung between the full combination and the whole market is tried
+    before falling back to all postings. The grain is always reported so the
+    hirer can see how specific the comparison actually is.
     """
     specified = [(k, v) for k, v in (('sector', sector),
                                      ('position_level', position_level),
@@ -141,11 +151,12 @@ def salary_lookup(sector: str | None = None, position_level: str | None = None,
                  if v is not None]
 
     ladder = []
-    if specified:
-        ladder.append(specified)
-        without_exp = [(k, v) for k, v in specified if k != 'experience_level']
-        if without_exp and without_exp != specified:
-            ladder.append(without_exp)
+    rung = specified
+    while rung:
+        ladder.append(rung)
+        present = {k for k, _ in rung}
+        drop = next(k for k in DROP_ORDER if k in present)
+        rung = [(k, v) for k, v in rung if k != drop]
 
     for rung in ladder:
         keys = tuple(k for k, _ in rung)
