@@ -90,21 +90,43 @@ def salary_range_bar(bench: dict, planned: float | None = None) -> Figure:
     return fig
 
 
-def norms_heatmap(norms: pd.DataFrame, highlight: tuple | None = None) -> Figure:
-    fig, ax = _new_axes(_heatmap_size(len(norms)))
+def _labeled_heatmap(
+    data: pd.DataFrame,
+    cmap: str,
+    cbar_label: str,
+    *,
+    vmin: float | None = None,
+    annot_size: float = 8,
+    highlight: tuple | None = None,
+    xlabel: str = 'minimum years of experience required',
+) -> Figure:
+    """Annotated matrix sized to its rows, with one cell optionally outlined.
+
+    `highlight` is an (index label, column label) pair; it is ignored when
+    either label is absent, so callers can pass a configuration that the
+    matrix happens not to cover.
+    """
+    fig, ax = _new_axes(_heatmap_size(len(data)))
     sns.heatmap(
-        norms, annot=True, fmt='.1f', cmap='Blues', vmin=0, ax=ax,
-        linewidths=.5, linecolor='white', annot_kws={'size': 8},
-        cbar_kws={'label': '% of postings at this level'},
+        data, annot=True, fmt='.1f', cmap=cmap, vmin=vmin, ax=ax,
+        linewidths=.5, linecolor='white', annot_kws={'size': annot_size},
+        cbar_kws={'label': cbar_label},
     )
     if highlight:
-        level, yrs = highlight
-        if level in norms.index and yrs in norms.columns:
-            _highlight(ax, norms.columns.get_loc(yrs), norms.index.get_loc(level))
-    ax.set_xlabel('minimum years of experience required', color=INK_MUTED)
+        row, col = highlight
+        if row in data.index and col in data.columns:
+            _highlight(ax, data.columns.get_loc(col), data.index.get_loc(row))
+    ax.set_xlabel(xlabel, color=INK_MUTED)
     ax.set_ylabel('')
     ax.tick_params(colors=INK_MUTED, labelcolor=INK_MUTED, rotation=0)
     return fig
+
+
+def norms_heatmap(norms: pd.DataFrame, highlight: tuple | None = None) -> Figure:
+    return _labeled_heatmap(
+        norms, 'Blues', '% of postings at this level',
+        vmin=0, annot_size=8, highlight=highlight,
+    )
 
 
 def response_chart(bands: pd.DataFrame) -> Figure:
@@ -153,20 +175,10 @@ def funnel_scatter(funnel: pd.DataFrame) -> Figure:
 
 
 def repost_heatmap(rates: pd.DataFrame, highlight: tuple | None = None) -> Figure:
-    fig, ax = _new_axes(_heatmap_size(len(rates)))
-    # Scale to the observed range rather than anchoring at zero: no cell falls
-    # below ~6%, so a zero floor spends a quarter of the ramp on empty space
-    # and flattens the contrast between bands.
-    sns.heatmap(
-        rates, annot=True, fmt='.1f', cmap='Reds', ax=ax,
-        linewidths=.5, linecolor='white', annot_kws={'size': 9},
-        cbar_kws={'label': 'repost rate (%)'},
+    # No vmin: scale to the observed range rather than anchoring at zero. No
+    # cell falls below ~6%, so a zero floor spends a quarter of the ramp on
+    # empty space and flattens the contrast between bands.
+    return _labeled_heatmap(
+        rates, 'Reds', 'repost rate (%)',
+        annot_size=9, highlight=highlight,
     )
-    if highlight:
-        band, yrs = highlight
-        if band in rates.index and yrs in rates.columns:
-            _highlight(ax, rates.columns.get_loc(yrs), rates.index.get_loc(band))
-    ax.set_xlabel('minimum years of experience required', color=INK_MUTED)
-    ax.set_ylabel('')
-    ax.tick_params(colors=INK_MUTED, labelcolor=INK_MUTED, rotation=0)
-    return fig
