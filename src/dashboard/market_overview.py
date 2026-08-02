@@ -13,6 +13,7 @@ from config.settings import STREAMLIT_CONFIG
 from src.database.database_manager import DatabaseManager
 from src.dashboard.utils import (
     create_metric_columns,
+    filter_selectbox,
     format_currency,
     format_percentage,
     create_comparison_table,
@@ -48,19 +49,19 @@ def render_filters(db):
     """
     col1, col2 = st.columns(2)
     with col1:
-        sector_choice = st.selectbox(
+        sector = filter_selectbox(
             "Sector:",
-            ["All Sectors"] + db.get_sector_list(),
+            db.get_sector_list(),
+            "All Sectors",
             key="mkt_sector"
         )
     with col2:
-        level_choice = st.selectbox(
+        position_level = filter_selectbox(
             "Position Level:",
-            ["All Levels"] + fetch_position_levels(db),
+            fetch_position_levels(db),
+            "All Levels",
             key="mkt_position_level"
         )
-    sector = None if sector_choice == "All Sectors" else sector_choice
-    position_level = None if level_choice == "All Levels" else level_choice
     return sector, position_level
 
 

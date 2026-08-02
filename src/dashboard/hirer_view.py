@@ -7,16 +7,12 @@ deduplicates the market the way those notebooks do.
 """
 import streamlit as st
 from src.dashboard import charts, data_loader
+from src.dashboard.utils import filter_selectbox
 
 
 ALL_SECTORS = "All sectors"
 ALL_LEVELS = "All levels"
 ALL_EXPERIENCE = "All experience levels"
-
-
-def _chosen(value: str, all_label: str) -> str | None:
-    """None means 'don't narrow on this dimension'."""
-    return None if value == all_label else value
 
 
 def _config_panel() -> dict:
@@ -30,13 +26,13 @@ def _config_panel() -> dict:
         st.subheader("The vacancy you're posting")
         st.caption("These settings drive every tab.")
 
-        sector = st.selectbox("Sector", [ALL_SECTORS] + data_loader.sector_list(),
-                              key="hirer_sector")
-        level = st.selectbox("Position level", [ALL_LEVELS] + data_loader.position_levels(),
-                             key="hirer_level")
-        experience = st.selectbox("Experience level",
-                                  [ALL_EXPERIENCE] + data_loader.experience_levels(),
-                                  key="hirer_experience")
+        sector = filter_selectbox("Sector", data_loader.sector_list(), ALL_SECTORS,
+                                  key="hirer_sector")
+        level = filter_selectbox("Position level", data_loader.position_levels(),
+                                 ALL_LEVELS, key="hirer_level")
+        experience = filter_selectbox("Experience level",
+                                      data_loader.experience_levels(),
+                                      ALL_EXPERIENCE, key="hirer_experience")
         salary = st.number_input(
             "Planned salary (S$/month)", min_value=0, max_value=50000,
             value=4000, step=250, key="hirer_salary",
@@ -46,10 +42,6 @@ def _config_panel() -> dict:
             "Minimum years of experience", min_value=0, max_value=30,
             value=3, step=1, key="hirer_years",
         )
-
-    sector = _chosen(sector, ALL_SECTORS)
-    level = _chosen(level, ALL_LEVELS)
-    experience = _chosen(experience, ALL_EXPERIENCE)
 
     return {
         'sector': sector, 'level': level, 'experience': experience,

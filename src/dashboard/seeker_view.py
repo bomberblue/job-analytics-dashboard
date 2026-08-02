@@ -2,7 +2,11 @@
 Job seeker's dashboard view.
 """
 import streamlit as st
-from src.dashboard.utils import format_currency, create_metric_columns
+from src.dashboard.utils import (
+    create_metric_columns,
+    filter_selectbox,
+    format_currency,
+)
 
 
 def render_seeker_view():
@@ -12,22 +16,21 @@ def render_seeker_view():
     col1, col2, col3 = st.columns([1, 1, 1])
 
     with col1:
-        exp_level = st.selectbox(
+        exp = filter_selectbox(
             "Your Experience Level:",
-            ["All Levels", "Entry Level", "Mid Level", "Senior"],
+            ["Entry Level", "Mid Level", "Senior"],
+            "All Levels",
             key="seeker_exp"
         )
     with col2:
-        sector_filter = st.selectbox(
+        sector = filter_selectbox(
             "Preferred Sector:",
-            ["All Sectors"] + st.session_state.db.get_sector_list(),
+            st.session_state.db.get_sector_list(),
+            "All Sectors",
             key="seeker_sector"
         )
     with col3:
         st.write("")  # Spacing
-
-    exp = None if exp_level == "All Levels" else exp_level
-    sector = None if sector_filter == "All Sectors" else sector_filter
 
     metrics = st.session_state.db.get_seeker_view(experience_level=exp, sector=sector)
 
