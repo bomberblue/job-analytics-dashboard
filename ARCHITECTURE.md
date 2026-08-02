@@ -6,8 +6,8 @@ graph TB
 
     subgraph "2. ETL Pipeline"
         PIPE["pipeline.py<br/>ORCHESTRATOR"]
-        CLEAN["data_cleaner.py<br/>CLEAN & STANDARDIZE<br/>• Parse salaries<br/>• Standardize text<br/>• Extract skills"]
-        FEAT["feature_engineer.py<br/>ENGINEER FEATURES<br/>• Salary bands<br/>• Seniority years<br/>• Competitiveness"]
+        CLEAN["data_cleaning.py<br/>CLEAN & FLAG<br/>• Fix salary sentinels<br/>• Normalize text<br/>• Flag duplicates"]
+        FEAT["feature_enrichment.py<br/>ENGINEER FEATURES<br/>• Extract skills<br/>• Salary bands<br/>• Seniority years"]
     end
 
     subgraph "3. Database Layer"
@@ -35,8 +35,7 @@ graph TB
     DB -->|query| DBMGR
     DBMGR -->|get_hirer_view| HIRER
     DBMGR -->|get_seeker_view| SEEKER
-    CONFIG -.->|configure| CLEAN
-    CONFIG -.->|configure| FEAT
+    CONFIG -.->|configure| APP
     HIRER -->|render| APP
     SEEKER -->|render| APP
     UTILS -->|format| APP
@@ -84,13 +83,11 @@ Dashboard renders metrics & charts
 
 ```
 ┌─ settings.py (Configuration)
-│   ├─ data_cleaner.py (uses salary thresholds, experience levels)
-│   ├─ feature_engineer.py (uses experience categories)
 │   └─ app.py (uses business metrics, sectors)
 │
 ├─ pipeline.py (Orchestrator)
-│   ├─ data_cleaner.py
-│   └─ feature_engineer.py
+│   ├─ data_cleaning.py
+│   └─ feature_enrichment.py
 │       └─ schema.py (DuckDB tables)
 │           └─ database_manager.py (Query builder)
 │

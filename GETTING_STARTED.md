@@ -5,8 +5,8 @@ Your team project is now fully scaffolded and ready for development!
 ## 📋 What's Been Created
 
 ### 1. **Data Pipeline** (`src/pipeline/`)
-- **data_cleaner.py** — Cleans salary data, standardizes experience levels, extracts skills
-- **feature_engineer.py** — Creates salary bands, competitiveness scores, seniority years
+- **data_cleaning.py** — Removes ghost/synthetic rows, fixes salary sentinels, normalizes text, flags duplicates
+- **feature_enrichment.py** — Renames columns to the schema, standardizes experience levels, extracts skills, creates salary bands
 - **pipeline.py** — Orchestrates ETL: Extract CSV → Clean → Engineer → Load to DuckDB
 
 ### 2. **Database Layer** (`src/database/`)
@@ -61,17 +61,17 @@ Helps job seekers understand **market opportunities**:
 ```
 SGJobData.csv (raw)
     ↓
-[DataCleaner]
-    • Parse salaries ($3000-5000 → min:3000, max:5000)
+[data_cleaning.py]
+    • Drop ghost rows and synthetic test rows
+    • Null out placeholder salaries, flag statistical outliers
+    • Normalize title/company text, strip zero-width characters
+    • Flag same-day duplicate postings (doesn't drop them)
+    ↓
+[feature_enrichment.py]
+    • Rename columns to match the jobs table schema
     • Standardize experience levels (junior → Entry Level)
     • Extract skills (Python, SQL, AWS, etc.)
-    • Remove duplicates & invalid records
-    ↓
-[FeatureEngineer]
     • Calculate salary midpoints & bands
-    • Extract seniority years from experience text
-    • Count required skills
-    • Compute competitiveness scores
     ↓
 [DuckDB]
     jobs (main table)
@@ -188,7 +188,7 @@ Upon completion, your team will have:
 | "Module not found" error | Run from project root: `cd job-analytics-dashboard` |
 | Database is empty | Check pipeline ran without errors; verify SGJobData.csv exists |
 | Dashboard shows "No data" | Restart Streamlit; check DB connection in `app.py` |
-| Salary parsing fails | Adjust regex in `data_cleaner.py` if format differs |
+| Salary parsing fails | Adjust regex in `data_cleaning.py` if format differs |
 | Slow queries | Add indexes or use `LIMIT` clause for testing |
 
 ---

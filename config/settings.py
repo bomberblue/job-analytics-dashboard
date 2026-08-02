@@ -22,16 +22,6 @@ RAW_CSV_PATH = DATA_RAW / "SGJobData.csv"
 # DuckDB settings
 DUCKDB_FILE = str(DB_FILE)
 
-# Data processing parameters
-SALARY_MIN_THRESHOLD = 1000  # SGD - filter out unrealistic salaries
-
-# Experience level categories
-EXPERIENCE_LEVELS = {
-    "entry": ["junior", "graduate", "internship", "fresher"],
-    "mid": ["mid-level", "senior", "lead"],
-    "senior": ["principal", "director", "manager"],
-}
-
 # Sectors commonly found in Singapore job market
 MAJOR_SECTORS = [
     "Technology",
