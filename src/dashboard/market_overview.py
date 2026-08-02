@@ -374,15 +374,9 @@ def _early_late_windows(db, sector=None, position_level=None, window_size=3):
     """
     Return (early_months, late_months): the first and last `window_size`
     distinct months present in the ramp-excluded, filtered data, as lists of
-    'YYYY-MM' strings.
-
-    Computed as two Python list slices off one sorted month list, not a
-    `ORDER BY ym ASC/DESC LIMIT N` SQL pair - that pair silently overlaps
-    whenever the filtered data has fewer than 2*window_size distinct months
-    (a real risk under a narrow sector/level filter), double-counting a month
-    in both windows with no signal that it happened. Slicing one list makes
-    disjointness a property of the code rather than of how much data happens
-    to be there.
+    'YYYY-MM' strings. Sliced from one sorted list rather than two independent
+    SQL queries, so the two windows can never overlap regardless of how few
+    months are available.
 
     Returns (None, None) when fewer than 2*window_size distinct months are
     available, so callers can show an "insufficient data" message instead.
@@ -396,7 +390,12 @@ def _early_late_windows(db, sector=None, position_level=None, window_size=3):
     return months[:window_size], months[-window_size:]
 
 
-def fetch_wage_decomposition(db, sector=None, position_level=None):
+def _sql_month_list(months):
+    """Quote a list of 'YYYY-MM' strings for a SQL IN (...) clause."""
+    return ", ".join(f"'{m}'" for m in months)
+
+
+def fetch_wage_decomposition(db, sector=None, position_level=None, windows=None):
     """
     Split the pay change between the earliest and latest 3 months of data into
     two parts: real wage growth within the same sector/position-level segments
@@ -412,14 +411,20 @@ def fetch_wage_decomposition(db, sector=None, position_level=None):
     Only segments with at least MIN_SEGMENT_SIZE postings in both windows are
     included (total_early_all/total_late_all report the unrestricted postings
     in each window, so callers can show how much was excluded).
+
+    windows: optional (early_months, late_months) pair from a prior
+    _early_late_windows() call, for a caller (render_wage_decomposition) that
+    also needs the same windows for fetch_sector_mix_shift and would otherwise
+    trigger that query twice. Computed internally when omitted.
     """
-    early_months, late_months = _early_late_windows(db, sector, position_level)
+    early_months, late_months = windows if windows is not None else \
+        _early_late_windows(db, sector, position_level)
     if early_months is None:
         return pd.DataFrame()
 
     where = _ramp_excluded_where(sector, position_level)
-    early_sql = ", ".join(f"'{m}'" for m in early_months)
-    late_sql = ", ".join(f"'{m}'" for m in late_months)
+    early_sql = _sql_month_list(early_months)
+    late_sql = _sql_month_list(late_months)
     sql = f"""
         WITH filtered AS (
             SELECT sector, position_level, strftime(posting_date, '%Y-%m') AS ym,
@@ -445,8 +450,8 @@ def fetch_wage_decomposition(db, sector=None, position_level=None):
             COUNT(*)::INTEGER AS n_segments,
             SUM(n_early)::INTEGER AS n_early_total,
             SUM(n_late)::INTEGER AS n_late_total,
-            (SELECT COUNT(*) FROM filtered WHERE ym IN ({early_sql})) AS total_early_all,
-            (SELECT COUNT(*) FROM filtered WHERE ym IN ({late_sql}))  AS total_late_all,
+            (SELECT SUM(n_early) FROM segment) AS total_early_all,
+            (SELECT SUM(n_late)  FROM segment) AS total_late_all,
             SUM(pay_early * n_early) / NULLIF(SUM(n_early), 0) AS actual_early,
             SUM(pay_late  * n_late)  / NULLIF(SUM(n_late), 0)  AS actual_late,
             SUM(pay_late  * n_early) / NULLIF(SUM(n_early), 0) AS late_pay_at_early_mix
@@ -458,20 +463,24 @@ def fetch_wage_decomposition(db, sector=None, position_level=None):
     return df
 
 
-def fetch_sector_mix_shift(db, position_level=None, limit=8):
+def fetch_sector_mix_shift(db, position_level=None, limit=8, windows=None):
     """
     Return the sectors whose share of postings changed the most between the
     early and late windows used by fetch_wage_decomposition. This is the detail
     behind that function's "mix effect": a sector gaining share pulls overall
     pay toward its own pay level even when nobody's individual wage moved.
+
+    windows: see fetch_wage_decomposition - reuse its windows when the caller
+    already computed them, instead of re-querying for the same months.
     """
-    early_months, late_months = _early_late_windows(db, sector=None, position_level=position_level)
+    early_months, late_months = windows if windows is not None else \
+        _early_late_windows(db, sector=None, position_level=position_level)
     if early_months is None:
         return pd.DataFrame()
 
     where = _ramp_excluded_where(sector=None, position_level=position_level)
-    early_sql = ", ".join(f"'{m}'" for m in early_months)
-    late_sql = ", ".join(f"'{m}'" for m in late_months)
+    early_sql = _sql_month_list(early_months)
+    late_sql = _sql_month_list(late_months)
     sql = f"""
         WITH filtered AS (
             SELECT sector, strftime(posting_date, '%Y-%m') AS ym
@@ -566,11 +575,14 @@ def render_market_concentration(db, sector=None, position_level=None):
 def render_wage_decomposition(db, sector=None, position_level=None):
     """Render the wage-growth decomposition and, for the unfiltered view, the
     sector share shifts behind its mix effect."""
-    result = fetch_wage_decomposition(db, sector, position_level)
+    # Computed once and passed to both fetch calls below: with no sector filter,
+    # fetch_sector_mix_shift would otherwise recompute the identical windows.
+    windows = _early_late_windows(db, sector, position_level)
+    result = fetch_wage_decomposition(db, sector, position_level, windows=windows)
     st.subheader("Wage Growth: Real Increase vs. Market Mix Shift")
 
     row = result.iloc[0] if not result.empty else None
-    if row is None or pd.isna(row['actual_early']) or row['n_segments'] == 0:
+    if row is None or pd.isna(row['actual_early']):
         st.info(
             f"Not enough data in this selection to decompose wage growth (need at "
             f"least 6 distinct months after {WAGE_DECOMPOSITION_START_DATE}, with "
@@ -611,7 +623,7 @@ def render_wage_decomposition(db, sector=None, position_level=None):
         st.caption('Sector mix-shift detail is shown only for "All Sectors".')
         return
 
-    shift_df = fetch_sector_mix_shift(db, position_level)
+    shift_df = fetch_sector_mix_shift(db, position_level, windows=windows)
     if shift_df.empty:
         return
     st.caption("Sectors with the biggest change in share of postings:")
