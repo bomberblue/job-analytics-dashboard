@@ -1,104 +1,239 @@
 """
 Hirer's dashboard view.
+
+Every section is backed by notebooks/hirer_layer1_analysis.ipynb or
+hirer_layer2_analysis.ipynb. Data comes from src/dashboard/data_loader.py, which
+deduplicates the market the way those notebooks do.
 """
 import streamlit as st
-from src.dashboard.utils import format_currency, create_metric_columns
+from src.dashboard import charts, data_loader
+
+
+ALL_SECTORS = "All sectors"
+ALL_LEVELS = "All levels"
+ALL_EXPERIENCE = "All experience levels"
+
+
+def _chosen(value: str, all_label: str) -> str | None:
+    """None means 'don't narrow on this dimension'."""
+    return None if value == all_label else value
+
+
+def _config_panel() -> dict:
+    """The vacancy the hirer is about to post -- drives every tab.
+
+    Lives in the sidebar so it stays visible and keeps its values while the
+    hirer moves between tabs. Controls are stacked rather than columned
+    because the sidebar is too narrow for side-by-side labels.
+    """
+    with st.sidebar:
+        st.subheader("The vacancy you're posting")
+        st.caption("These settings drive every tab.")
+
+        sector = st.selectbox("Sector", [ALL_SECTORS] + data_loader.sector_list(),
+                              key="hirer_sector")
+        level = st.selectbox("Position level", [ALL_LEVELS] + data_loader.position_levels(),
+                             key="hirer_level")
+        experience = st.selectbox("Experience level",
+                                  [ALL_EXPERIENCE] + data_loader.experience_levels(),
+                                  key="hirer_experience")
+        salary = st.number_input(
+            "Planned salary (S$/month)", min_value=0, max_value=50000,
+            value=4000, step=250, key="hirer_salary",
+            help="The midpoint of the range you plan to advertise.",
+        )
+        years = st.number_input(
+            "Minimum years of experience", min_value=0, max_value=30,
+            value=3, step=1, key="hirer_years",
+        )
+
+    sector = _chosen(sector, ALL_SECTORS)
+    level = _chosen(level, ALL_LEVELS)
+    experience = _chosen(experience, ALL_EXPERIENCE)
+
+    return {
+        'sector': sector, 'level': level, 'experience': experience,
+        'salary': salary or None, 'years': years,
+        'pay_band': data_loader.pay_band_for(salary or None),
+        'yrs_bucket': data_loader.yrs_bucket_for(years),
+    }
+
+
+def _layer1_note() -> None:
+    """Scope note for posting-time measures, valid across the whole market."""
+    st.caption(
+        f"Based on all {data_loader.cohort_sizes()['market']:,} postings (duplicates "
+        "removed), Mar 2023 – May 2024."
+    )
+
+
+def _layer2_note() -> None:
+    """Scope note for engagement measures, which only a narrow cohort supports."""
+    st.caption(
+        f"Based on {data_loader.cohort_sizes()['first_cycle']:,} first-cycle 30-day "
+        "postings from Mar–Jun 2023 — the only window where application and view "
+        "counts finished accumulating. All sectors combined; the sector choice "
+        "above does not filter this tab."
+    )
+
+
+def _render_salary_benchmark(cfg: dict) -> None:
+    """#1 -- layer 1 s.3, the core deliverable."""
+    st.subheader("What comparable employers pay")
+    _layer1_note()
+    bench = data_loader.salary_lookup(cfg['sector'], cfg['level'], cfg['experience'])
+
+    with charts.MPL_LOCK:
+        st.write(charts.salary_range_bar(bench, cfg['salary']))
+
+    st.caption(
+        f"Benchmark grain: **{bench['grain']}** · {int(bench['n']):,} comparable "
+        "postings with a disclosed salary. Advertised salary midpoint; percentiles "
+        "rather than averages, because a handful of extreme postings survive the "
+        "salary quality filter."
+    )
+
+    if cfg['salary']:
+        if cfg['salary'] < bench['mid_p25']:
+            st.warning(
+                f"Your ${cfg['salary']:,.0f} sits below the 25th percentile "
+                f"(${bench['mid_p25']:,.0f}) for comparable postings."
+            )
+        elif cfg['salary'] > bench['mid_p75']:
+            st.info(
+                f"Your ${cfg['salary']:,.0f} sits above the 75th percentile "
+                f"(${bench['mid_p75']:,.0f}) for comparable postings."
+            )
+
+
+def _render_norms(cfg: dict) -> None:
+    """#3 -- layer 1 s.4."""
+    st.subheader("Experience asked, by position level")
+    _layer1_note()
+    norms = data_loader.config_norms(cfg['sector'])
+    if norms.empty:
+        st.info("Not enough postings in this sector to read configuration norms.")
+        return
+
+    # No position level chosen means no single cell to point at, so the heatmap
+    # is shown unannotated and the rarity check is skipped.
+    marked = cfg['level'] is not None
+    highlight = (cfg['level'], cfg['yrs_bucket']) if marked else None
+
+    with charts.MPL_LOCK:
+        st.write(charts.norms_heatmap(norms, highlight=highlight))
+    st.caption(
+        "Each row shows how postings at that level distribute their minimum "
+        "years-of-experience ask (rows sum to 100%)."
+        + (" Your combination is outlined." if marked else
+           " Choose a position level above to mark your combination.")
+    )
+
+    if marked and cfg['level'] in norms.index and cfg['yrs_bucket'] in norms.columns:
+        share = norms.loc[cfg['level'], cfg['yrs_bucket']]
+        if share < 1.0:
+            st.warning(
+                f"Fewer than 1% of **{cfg['level']}** postings ask for "
+                f"**{cfg['yrs_bucket']}** years ({share:.2f}%). This pairing is one "
+                "the market essentially never uses."
+            )
+
+
+def _render_response(cfg: dict) -> None:
+    """#6 -- layer 2 s.3."""
+    st.subheader("Applicant response by pay band")
+    _layer2_note()
+    bands = data_loader.response_by_pay_band()
+    if bands.empty:
+        return
+
+    with charts.MPL_LOCK:
+        st.write(charts.response_chart(bands))
+    st.caption(
+        "Pay dominates response. Getting applications ≥ vacancies is a necessary "
+        "condition for filling the role, not proof that it filled."
+    )
+
+    if cfg['pay_band'] in bands.index:
+        row = bands.loc[cfg['pay_band']]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Median applications", f"{row.apps_p50:.0f}",
+                  help=f"P10–P90: {row.apps_p10:.0f}–{row.apps_p90:.0f}")
+        c2.metric("Under-filled risk", f"{row.under_filled:.0%}")
+        c3.metric("Comparable postings", f"{int(row.n):,}")
+        st.caption(f"For your pay band: **{cfg['pay_band']}**")
+
+
+def _render_funnel(cfg: dict) -> None:
+    """#7 -- layer 2 s.4."""
+    st.subheader("Reach or conversion — which is the problem?")
+    _layer2_note()
+    funnel = data_loader.funnel_by_pay_band()
+    if funnel.empty:
+        return
+
+    with charts.MPL_LOCK:
+        st.write(charts.funnel_scatter(funnel))
+    st.caption(
+        "The two effects compound rather than trade off: low-paying postings draw "
+        "fewer viewers *and* convert fewer of them. If conversion is the weak point, "
+        "pay is the lever; if reach is, the sector is simply crowded."
+    )
+
+
+def _render_repost_risk(cfg: dict) -> None:
+    """#8 -- layer 2 s.5-6, the headline finding."""
+    st.subheader("Repost risk: experience asked against pay offered")
+    _layer2_note()
+    rates = data_loader.repost_matrix()
+    if rates.empty:
+        return
+
+    with charts.MPL_LOCK:
+        st.write(charts.repost_heatmap(rates, highlight=(cfg['pay_band'], cfg['yrs_bucket'])))
+    st.caption(
+        f"Share of postings that were relisted (cells under {data_loader.MIN_N} postings "
+        "are blank). Shown split by pay band because the aggregate view reverses "
+        "the sign — the protective-looking effect of demanding experience is pay "
+        "in disguise. Your combination is outlined."
+    )
+
+    contrast = data_loader.repost_contrast()
+    if cfg['pay_band'] in contrast.index and cfg['years'] >= 3:
+        row = contrast.loc[cfg['pay_band']]
+        if row.repost_gte3 > row.repost_lt3:
+            st.warning(
+                f"**Danger zone.** In the {cfg['pay_band']} band, postings asking "
+                f"3+ years were reposted {row.repost_gte3:.1f}% of the time against "
+                f"{row.repost_lt3:.1f}% for those asking less. Consider raising the "
+                "pay band or lowering the experience bar. This is a risk factor "
+                "across comparable postings, not a prediction about yours."
+            )
+
+
+# Tab label -> renderer. The first two read the whole market (layer 1); the
+# last three read the narrow engagement cohort (layer 2).
+SECTIONS = (
+    ("Salary benchmark", _render_salary_benchmark),
+    ("Experience norms", _render_norms),
+    ("Applicant response", _render_response),
+    ("Reach vs conversion", _render_funnel),
+    ("Repost risk", _render_repost_risk),
+)
 
 
 def render_hirer_view():
     """Render hirer-focused dashboard."""
     st.header("👔 Hirer's Dashboard")
 
-    col1, col2 = st.columns([2, 1])
+    cfg = _config_panel()
 
-    with col1:
-        st.subheader("Market Overview")
-    with col2:
-        sector_filter = st.selectbox(
-            "Filter by Sector:",
-            ["All Sectors"] + st.session_state.db.get_sector_list(),
-            key="hirer_sector"
-        )
-
-    sector = None if sector_filter == "All Sectors" else sector_filter
-    metrics = st.session_state.db.get_hirer_view(sector=sector)
-
-    # Market overview metrics
-    if not metrics['market_overview'].empty:
-        row = metrics['market_overview'].iloc[0]
-        create_metric_columns({
-            "Total Postings": f"{int(row['total_postings']):,}",
-            "Active Companies": f"{int(row['num_companies']):,}",
-            "Unique Roles": f"{int(row['unique_roles']):,}",
-            "Avg Salary": format_currency(row['avg_salary']),
-        })
-
-    # Top roles
-    st.subheader("Top Hiring Roles")
-    if not metrics['top_roles'].empty:
-        cols = st.columns(3)
-        for idx, (_, row) in enumerate(metrics['top_roles'].head(3).iterrows()):
-            with cols[idx % 3]:
-                st.write(f"**{row['title']}**")
-                st.write(f"Postings: {int(row['postings'])}")
-                st.write(f"Avg Salary: {format_currency(row['avg_salary'])}")
-                st.write(f"Companies: {int(row['companies'])}")
-
-    # Roles in demand
-    st.subheader("Roles in Demand")
-    if not metrics['top_roles'].empty:
-        roles_data = metrics['top_roles'].head(10)
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.bar_chart(
-                roles_data.set_index('title')['postings'],
-                use_container_width=True
-            )
-
-        with col2:
-            st.write("**Top Paying Roles**")
-            roles_data_sorted = roles_data.sort_values('avg_salary', ascending=False)
-            for _, row in roles_data_sorted.head(5).iterrows():
-                st.write(f"{row['title']}: {format_currency(row['avg_salary'])}")
-
-    # Hiring trends (year -> month drill-down)
-    st.subheader("Hiring Trends")
-
-    if st.session_state.get('hirer_trend_sector') != sector:
-        st.session_state.hirer_trend_sector = sector
-        st.session_state.hirer_trend_year = None
-
-    if st.session_state.get('hirer_trend_year') is None:
-        yearly_trends = st.session_state.db.get_hiring_trends(sector=sector, granularity='year')
-        if not yearly_trends.empty:
-            st.caption("Postings by year — select a year to drill into monthly detail")
-            st.bar_chart(
-                yearly_trends.set_index('period')['postings'],
-                use_container_width=True
-            )
-            years = yearly_trends['period'].tolist()
-            selected_year = st.selectbox(
-                "Drill down into a year:",
-                ["Select a year..."] + [str(y) for y in years],
-                key="hirer_trend_year_select"
-            )
-            if selected_year != "Select a year...":
-                st.session_state.hirer_trend_year = int(selected_year)
-                st.rerun()
-    else:
-        if st.button("⬅ Back to yearly view"):
-            st.session_state.hirer_trend_year = None
-            st.rerun()
-        monthly_trends = st.session_state.db.get_hiring_trends(
-            sector=sector, granularity='month', year=st.session_state.hirer_trend_year
-        )
-        if not monthly_trends.empty:
-            st.caption(f"Postings by month — {st.session_state.hirer_trend_year}")
-            st.bar_chart(
-                monthly_trends.set_index('period')['postings'],
-                use_container_width=True
-            )
-        else:
-            st.info("No data for this year.")
+    # on_change="rerun" makes tab bodies lazy: only the selected tab renders,
+    # so switching sectors does not rebuild all five figures.
+    tabs = st.tabs([label for label, _ in SECTIONS],
+                   on_change="rerun", key="hirer_tabs")
+    for tab, (_, render) in zip(tabs, SECTIONS):
+        with tab:
+            # `open` is None when state tracking is unavailable; render then.
+            if tab.open is not False:
+                render(cfg)
