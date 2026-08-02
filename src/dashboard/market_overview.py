@@ -20,6 +20,19 @@ from src.dashboard.utils import (
 )
 
 
+def _labeled_table(df, rename_map):
+    """Render df as a table with plain-English headers.
+
+    columns_to_show is always exactly rename_map's values, in order - deriving
+    it here instead of typing it out at each call site means renaming or
+    adding a column can't drift the two lists out of sync.
+    """
+    create_comparison_table(
+        df.rename(columns=rename_map),
+        columns_to_show=list(rename_map.values())
+    )
+
+
 def build_where_clause(sector=None, position_level=None):
     """Build a composable SQL WHERE clause from optional filters."""
     conditions = ["posting_date IS NOT NULL"]
@@ -179,7 +192,7 @@ def render_industry_momentum(db, sector=None, position_level=None):
         return
     display_df = df.copy()
     display_df['pct_change'] = display_df['pct_change'].apply(format_percentage)
-    display_df = display_df.rename(columns={
+    _labeled_table(display_df, {
         'sector': 'Industry',
         'recent_avg_monthly': 'Recent Avg. Postings/Month',
         'prior_avg_monthly': 'Prior Avg. Postings/Month',
@@ -187,13 +200,6 @@ def render_industry_momentum(db, sector=None, position_level=None):
         'recent_month_count': 'Recent Months Counted',
         'prior_month_count': 'Prior Months Counted',
     })
-    create_comparison_table(
-        display_df,
-        columns_to_show=[
-            'Industry', 'Recent Avg. Postings/Month', 'Prior Avg. Postings/Month',
-            '% Change', 'Recent Months Counted', 'Prior Months Counted',
-        ]
-    )
 
 
 def fetch_salary_trend(db, sector=None, position_level=None):
@@ -222,6 +228,9 @@ def render_salary_trend(db, sector=None, position_level=None):
     # st.line_chart has no axis-range control and defaults to a zero-based y-axis,
     # which on this data (a $500 range) squeezes every real change into a sliver
     # at the top of the chart. alt.Scale(zero=False) fits the axis to the data.
+    # Deliberately a one-off: the bar charts elsewhere in this file are correctly
+    # zero-based (they encode magnitude), so this isn't the start of a wider Altair
+    # migration - just the one line chart with a range too narrow for a zero axis.
     chart = alt.Chart(df).mark_line(point=True).encode(
         x=alt.X('month:O', title=None),
         y=alt.Y('median_pay:Q', title='Median Pay ($)', scale=alt.Scale(zero=False)),
@@ -363,15 +372,11 @@ def render_seasonality(db, sector=None, position_level=None):
         return
     st.bar_chart(df.set_index('month_name')['avg_postings'], use_container_width=True)
     st.caption("Years and total postings behind each bar (a thin sample, like a month covered by only one partial year, will read as unreliable):")
-    display_df = df.rename(columns={
+    _labeled_table(df, {
         'month_name': 'Month',
         'years_included': 'Years of Data',
         'total_postings': 'Total Postings',
     })
-    create_comparison_table(
-        display_df,
-        columns_to_show=['Month', 'Years of Data', 'Total Postings']
-    )
 
 
 # Postings before this date are the platform's early onboarding ramp (Oct 2022 -
@@ -587,16 +592,12 @@ def render_market_concentration(db, sector=None, position_level=None):
     )
     display_df = df.copy()
     display_df['share_pct'] = display_df['share_pct'].apply(format_percentage)
-    display_df = display_df.rename(columns={
+    _labeled_table(display_df, {
         'company': 'Company',
         'postings': 'Postings',
         'share_pct': 'Share of Market',
         'likely_agency': 'Likely Recruitment Agency',
     })
-    create_comparison_table(
-        display_df,
-        columns_to_show=['Company', 'Postings', 'Share of Market', 'Likely Recruitment Agency']
-    )
 
 
 def render_wage_decomposition(db, sector=None, position_level=None):
@@ -657,16 +658,12 @@ def render_wage_decomposition(db, sector=None, position_level=None):
     display_df = shift_df.copy()
     for col in ['share_early_pct', 'share_late_pct', 'share_change_pct']:
         display_df[col] = display_df[col].apply(format_percentage)
-    display_df = display_df.rename(columns={
+    _labeled_table(display_df, {
         'sector': 'Industry',
         'share_early_pct': 'Early Period Share',
         'share_late_pct': 'Late Period Share',
         'share_change_pct': 'Change in Share',
     })
-    create_comparison_table(
-        display_df,
-        columns_to_show=['Industry', 'Early Period Share', 'Late Period Share', 'Change in Share']
-    )
 
 
 def render_market_overview_view():
