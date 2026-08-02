@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import streamlit as st
 import pandas as pd
+import altair as alt
 from config.settings import STREAMLIT_CONFIG
 from src.database.database_manager import DatabaseManager
 from src.dashboard.utils import (
@@ -178,11 +179,19 @@ def render_industry_momentum(db, sector=None, position_level=None):
         return
     display_df = df.copy()
     display_df['pct_change'] = display_df['pct_change'].apply(format_percentage)
+    display_df = display_df.rename(columns={
+        'sector': 'Industry',
+        'recent_avg_monthly': 'Recent Avg. Postings/Month',
+        'prior_avg_monthly': 'Prior Avg. Postings/Month',
+        'pct_change': '% Change',
+        'recent_month_count': 'Recent Months Counted',
+        'prior_month_count': 'Prior Months Counted',
+    })
     create_comparison_table(
         display_df,
         columns_to_show=[
-            'sector', 'recent_avg_monthly', 'prior_avg_monthly', 'pct_change',
-            'recent_month_count', 'prior_month_count',
+            'Industry', 'Recent Avg. Postings/Month', 'Prior Avg. Postings/Month',
+            '% Change', 'Recent Months Counted', 'Prior Months Counted',
         ]
     )
 
@@ -210,7 +219,14 @@ def render_salary_trend(db, sector=None, position_level=None):
         st.info("No postings match the current filters.")
         return
     st.caption(f"Median pay by month, {df['month'].iloc[0]} - {df['month'].iloc[-1]}")
-    st.line_chart(df.set_index('month')['median_pay'], use_container_width=True)
+    # st.line_chart has no axis-range control and defaults to a zero-based y-axis,
+    # which on this data (a $500 range) squeezes every real change into a sliver
+    # at the top of the chart. alt.Scale(zero=False) fits the axis to the data.
+    chart = alt.Chart(df).mark_line(point=True).encode(
+        x=alt.X('month:O', title=None),
+        y=alt.Y('median_pay:Q', title='Median Pay ($)', scale=alt.Scale(zero=False)),
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def fetch_position_level_ranking(db, sector=None, position_level=None):
@@ -347,9 +363,14 @@ def render_seasonality(db, sector=None, position_level=None):
         return
     st.bar_chart(df.set_index('month_name')['avg_postings'], use_container_width=True)
     st.caption("Years and total postings behind each bar (a thin sample, like a month covered by only one partial year, will read as unreliable):")
+    display_df = df.rename(columns={
+        'month_name': 'Month',
+        'years_included': 'Years of Data',
+        'total_postings': 'Total Postings',
+    })
     create_comparison_table(
-        df,
-        columns_to_show=['month_name', 'years_included', 'total_postings']
+        display_df,
+        columns_to_show=['Month', 'Years of Data', 'Total Postings']
     )
 
 
@@ -566,9 +587,15 @@ def render_market_concentration(db, sector=None, position_level=None):
     )
     display_df = df.copy()
     display_df['share_pct'] = display_df['share_pct'].apply(format_percentage)
+    display_df = display_df.rename(columns={
+        'company': 'Company',
+        'postings': 'Postings',
+        'share_pct': 'Share of Market',
+        'likely_agency': 'Likely Recruitment Agency',
+    })
     create_comparison_table(
         display_df,
-        columns_to_show=['company', 'postings', 'share_pct', 'likely_agency']
+        columns_to_show=['Company', 'Postings', 'Share of Market', 'Likely Recruitment Agency']
     )
 
 
@@ -630,9 +657,15 @@ def render_wage_decomposition(db, sector=None, position_level=None):
     display_df = shift_df.copy()
     for col in ['share_early_pct', 'share_late_pct', 'share_change_pct']:
         display_df[col] = display_df[col].apply(format_percentage)
+    display_df = display_df.rename(columns={
+        'sector': 'Industry',
+        'share_early_pct': 'Early Period Share',
+        'share_late_pct': 'Late Period Share',
+        'share_change_pct': 'Change in Share',
+    })
     create_comparison_table(
         display_df,
-        columns_to_show=['sector', 'share_early_pct', 'share_late_pct', 'share_change_pct']
+        columns_to_show=['Industry', 'Early Period Share', 'Late Period Share', 'Change in Share']
     )
 
 
