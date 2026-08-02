@@ -12,7 +12,9 @@ from src.pipeline.data_cleaning import clean_dataset, assert_no_dead_columns
 from src.pipeline.feature_enrichment import feature_enrichment, JOBS_SCHEMA_COLUMNS
 from src.database.database_manager import DatabaseManager
 from src.database.schema import initialize_database
-from config.settings import RAW_CSV_PATH
+from config.settings import RAW_CSV_PATH, DATA_PROCESSED
+
+ENRICHED_PARQUET_PATH = DATA_PROCESSED / "jobs_enriched.parquet"
 
 
 class DataPipeline:
@@ -52,6 +54,14 @@ class DataPipeline:
         print("✅ Data successfully loaded into processed layer")
         return True
 
+    def save_parquet(self, enriched: pd.DataFrame, path: Path = ENRICHED_PARQUET_PATH) -> bool:
+        """Write the enriched frame to parquet for downstream loads/analysis."""
+        print(f"\n💾 Saving enriched data to {path}...")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        enriched.to_parquet(path, index=False)
+        print(f"✓ Wrote {len(enriched)} rows, {len(enriched.columns)} columns")
+        return True
+
     def run(self, csv_path: str = None, nrows: int = None):
         """Run the complete pipeline with raw and processed layers."""
         print("\n" + "="*60)
@@ -74,6 +84,8 @@ class DataPipeline:
             # docstring for why a bounded/test extract must not run this check.
             assert_no_dead_columns(cleaned)
         enriched = feature_enrichment(cleaned, job_category=job_category)
+
+        self.save_parquet(enriched)
 
         success = self.load_processed(enriched)
 
