@@ -370,6 +370,32 @@ def _ramp_excluded_where(sector=None, position_level=None):
         f" AND posting_date >= '{WAGE_DECOMPOSITION_START_DATE}'"
 
 
+def _early_late_windows(db, sector=None, position_level=None, window_size=3):
+    """
+    Return (early_months, late_months): the first and last `window_size`
+    distinct months present in the ramp-excluded, filtered data, as lists of
+    'YYYY-MM' strings.
+
+    Computed as two Python list slices off one sorted month list, not a
+    `ORDER BY ym ASC/DESC LIMIT N` SQL pair - that pair silently overlaps
+    whenever the filtered data has fewer than 2*window_size distinct months
+    (a real risk under a narrow sector/level filter), double-counting a month
+    in both windows with no signal that it happened. Slicing one list makes
+    disjointness a property of the code rather than of how much data happens
+    to be there.
+
+    Returns (None, None) when fewer than 2*window_size distinct months are
+    available, so callers can show an "insufficient data" message instead.
+    """
+    where = _ramp_excluded_where(sector, position_level)
+    months = db.query(
+        f"SELECT DISTINCT strftime(posting_date, '%Y-%m') AS ym FROM jobs {where} ORDER BY ym"
+    )['ym'].tolist()
+    if len(months) < 2 * window_size:
+        return None, None
+    return months[:window_size], months[-window_size:]
+
+
 def fetch_wage_decomposition(db, sector=None, position_level=None):
     """
     Split the pay change between the earliest and latest 3 months of data into
@@ -382,8 +408,18 @@ def fetch_wage_decomposition(db, sector=None, position_level=None):
     actual_early to that bridge value is pure wage movement; the gap from the
     bridge value to actual_late is pure mix movement. The two always sum
     exactly to the headline change.
+
+    Only segments with at least MIN_SEGMENT_SIZE postings in both windows are
+    included (total_early_all/total_late_all report the unrestricted postings
+    in each window, so callers can show how much was excluded).
     """
+    early_months, late_months = _early_late_windows(db, sector, position_level)
+    if early_months is None:
+        return pd.DataFrame()
+
     where = _ramp_excluded_where(sector, position_level)
+    early_sql = ", ".join(f"'{m}'" for m in early_months)
+    late_sql = ", ".join(f"'{m}'" for m in late_months)
     sql = f"""
         WITH filtered AS (
             SELECT sector, position_level, strftime(posting_date, '%Y-%m') AS ym,
@@ -391,16 +427,13 @@ def fetch_wage_decomposition(db, sector=None, position_level=None):
             FROM jobs
             {where}
         ),
-        all_months AS (SELECT DISTINCT ym FROM filtered),
-        early_months AS (SELECT ym FROM all_months ORDER BY ym ASC LIMIT 3),
-        late_months AS (SELECT ym FROM all_months ORDER BY ym DESC LIMIT 3),
         segment AS (
             SELECT
                 sector, position_level,
-                AVG(pay) FILTER (WHERE ym IN (SELECT ym FROM early_months)) AS pay_early,
-                AVG(pay) FILTER (WHERE ym IN (SELECT ym FROM late_months))  AS pay_late,
-                COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM early_months)) AS n_early,
-                COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM late_months))  AS n_late
+                AVG(pay) FILTER (WHERE ym IN ({early_sql})) AS pay_early,
+                AVG(pay) FILTER (WHERE ym IN ({late_sql}))  AS pay_late,
+                COUNT(*) FILTER (WHERE ym IN ({early_sql})) AS n_early,
+                COUNT(*) FILTER (WHERE ym IN ({late_sql}))  AS n_late
             FROM filtered
             GROUP BY sector, position_level
         ),
@@ -409,17 +442,20 @@ def fetch_wage_decomposition(db, sector=None, position_level=None):
             WHERE n_early >= {MIN_SEGMENT_SIZE} AND n_late >= {MIN_SEGMENT_SIZE}
         )
         SELECT
-            (SELECT MIN(ym) FROM early_months) || ' to ' || (SELECT MAX(ym) FROM early_months) AS early_window_label,
-            (SELECT MIN(ym) FROM late_months)  || ' to ' || (SELECT MAX(ym) FROM late_months)  AS late_window_label,
             COUNT(*)::INTEGER AS n_segments,
             SUM(n_early)::INTEGER AS n_early_total,
             SUM(n_late)::INTEGER AS n_late_total,
+            (SELECT COUNT(*) FROM filtered WHERE ym IN ({early_sql})) AS total_early_all,
+            (SELECT COUNT(*) FROM filtered WHERE ym IN ({late_sql}))  AS total_late_all,
             SUM(pay_early * n_early) / NULLIF(SUM(n_early), 0) AS actual_early,
             SUM(pay_late  * n_late)  / NULLIF(SUM(n_late), 0)  AS actual_late,
             SUM(pay_late  * n_early) / NULLIF(SUM(n_early), 0) AS late_pay_at_early_mix
         FROM valid
     """
-    return db.query(sql)
+    df = db.query(sql)
+    df['early_window_label'] = f"{early_months[0]} to {early_months[-1]}"
+    df['late_window_label'] = f"{late_months[0]} to {late_months[-1]}"
+    return df
 
 
 def fetch_sector_mix_shift(db, position_level=None, limit=8):
@@ -429,27 +465,30 @@ def fetch_sector_mix_shift(db, position_level=None, limit=8):
     behind that function's "mix effect": a sector gaining share pulls overall
     pay toward its own pay level even when nobody's individual wage moved.
     """
+    early_months, late_months = _early_late_windows(db, sector=None, position_level=position_level)
+    if early_months is None:
+        return pd.DataFrame()
+
     where = _ramp_excluded_where(sector=None, position_level=position_level)
+    early_sql = ", ".join(f"'{m}'" for m in early_months)
+    late_sql = ", ".join(f"'{m}'" for m in late_months)
     sql = f"""
         WITH filtered AS (
             SELECT sector, strftime(posting_date, '%Y-%m') AS ym
             FROM jobs
             {where}
         ),
-        all_months AS (SELECT DISTINCT ym FROM filtered),
-        early_months AS (SELECT ym FROM all_months ORDER BY ym ASC LIMIT 3),
-        late_months AS (SELECT ym FROM all_months ORDER BY ym DESC LIMIT 3),
         totals AS (
             SELECT
-                COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM early_months)) AS total_early,
-                COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM late_months))  AS total_late
+                COUNT(*) FILTER (WHERE ym IN ({early_sql})) AS total_early,
+                COUNT(*) FILTER (WHERE ym IN ({late_sql}))  AS total_late
             FROM filtered
         )
         SELECT
             sector,
-            COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM early_months)) * 100.0
+            COUNT(*) FILTER (WHERE ym IN ({early_sql})) * 100.0
                 / NULLIF((SELECT total_early FROM totals), 0) AS share_early_pct,
-            COUNT(*) FILTER (WHERE ym IN (SELECT ym FROM late_months)) * 100.0
+            COUNT(*) FILTER (WHERE ym IN ({late_sql})) * 100.0
                 / NULLIF((SELECT total_late FROM totals), 0) AS share_late_pct
         FROM filtered
         GROUP BY sector
@@ -533,8 +572,9 @@ def render_wage_decomposition(db, sector=None, position_level=None):
     row = result.iloc[0] if not result.empty else None
     if row is None or pd.isna(row['actual_early']) or row['n_segments'] == 0:
         st.info(
-            f"Not enough data in this selection to decompose wage growth (each "
-            f"sector/position-level segment needs at least {MIN_SEGMENT_SIZE} "
+            f"Not enough data in this selection to decompose wage growth (need at "
+            f"least 6 distinct months after {WAGE_DECOMPOSITION_START_DATE}, with "
+            f"each sector/position-level segment having at least {MIN_SEGMENT_SIZE} "
             f"postings in both the earliest and latest 3-month windows)."
         )
         return
@@ -542,14 +582,19 @@ def render_wage_decomposition(db, sector=None, position_level=None):
     total_change = row['actual_late'] - row['actual_early']
     within_effect = row['late_pay_at_early_mix'] - row['actual_early']
     mix_effect = row['actual_late'] - row['late_pay_at_early_mix']
+    excluded_early = int(row['total_early_all'] - row['n_early_total'])
+    excluded_late = int(row['total_late_all'] - row['n_late_total'])
 
     st.caption(
         f"Comparing {row['early_window_label']} to {row['late_window_label']}, "
-        f"across {int(row['n_segments'])} sector x position-level segments "
-        f"({int(row['n_early_total']):,} and {int(row['n_late_total']):,} postings)."
+        f"across {int(row['n_segments'])} sector x position-level segments with at "
+        f"least {MIN_SEGMENT_SIZE} postings in both windows "
+        f"({int(row['n_early_total']):,} and {int(row['n_late_total']):,} postings; "
+        f"{excluded_early:,} early and {excluded_late:,} late postings fell in "
+        f"thinner segments and are excluded)."
     )
     create_metric_columns({
-        "Headline Pay Change": format_currency(total_change),
+        "Pay Change (Matched Segments)": format_currency(total_change),
         "From Real Wage Growth": format_currency(within_effect),
         "From Market Mix Shift": format_currency(mix_effect),
     })
@@ -557,7 +602,9 @@ def render_wage_decomposition(db, sector=None, position_level=None):
         "Real wage growth is the pay change within the same sector and position "
         "level. Market mix shift is the effect of the market posting relatively "
         "more (or fewer) jobs in higher- or lower-paying segments - it can mask "
-        "or exaggerate the headline number even when nobody's actual pay moved."
+        "or exaggerate the headline number even when nobody's actual pay moved. "
+        "This figure is restricted to segments with enough postings in both "
+        "windows to compare, so it can differ from the overall Median Pay above."
     )
 
     if sector is not None:
