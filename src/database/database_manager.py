@@ -16,18 +16,8 @@ class DatabaseManager:
         self.db_path = DUCKDB_FILE
     
     def get_connection(self):
-        """Get a DuckDB connection and initialize the database if needed."""
-        conn = duckdb.connect(self.db_path)
-        try:
-            conn.execute("SELECT 1 FROM jobs LIMIT 1").fetchall()
-        except Exception:
-            initialize_database()
-            if RAW_CSV_PATH.exists():
-                from src.pipeline.pipeline import DataPipeline
-                DataPipeline().run(csv_path=str(RAW_CSV_PATH))
-            else:
-                conn.execute(JOBS_SCHEMA)
-        return conn
+        """Get a DuckDB connection."""
+        return duckdb.connect(self.db_path)
     
     def insert_raw_jobs(self, df: pd.DataFrame) -> int:
         """
@@ -149,67 +139,23 @@ class DatabaseManager:
             conn.close()
             return 0
     
-    def query(self, sql: str) -> pd.DataFrame:
-        """Execute SQL query and return results as DataFrame."""
-        conn = self.get_connection()
-        result = conn.execute(sql).df()
-        conn.close()
-        return result
+    def query(self, sql: str, read_only: bool = False) -> pd.DataFrame:
+        """Execute SQL query and return results as DataFrame.
+
+        Closed in a finally: a query that raises must still release the file
+        lock, or the caller's next attempt fails for a reason unrelated to the
+        one that actually broke.
+        """
+        conn = self.get_connection(read_only=read_only)
+        try:
+            return conn.execute(sql).df()
+        finally:
+            conn.close()
     
-    def get_hirer_view(self, sector: str = None) -> dict:
-        """
-        Get metrics for hirer view.
-        Focused on: demand, hiring trends, required skills.
-        """
-        conn = self.get_connection()
-        
-        filters = ""
-        if sector:
-            filters = f"WHERE sector = '{sector}'"
-        
-        metrics = {
-            "market_overview": conn.execute(f"""
-                SELECT 
-                    COUNT(*) as total_postings,
-                    COUNT(DISTINCT company) as num_companies,
-                    COUNT(DISTINCT title) as unique_roles,
-                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
-                FROM jobs
-                {filters}
-            """).df(),
-
-            "top_roles": conn.execute(f"""
-                SELECT
-                    title,
-                    COUNT(*) as postings,
-                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary,
-                    COUNT(DISTINCT company) as companies
-                FROM jobs
-                {filters}
-                GROUP BY title
-                ORDER BY postings DESC
-                LIMIT 10
-            """).df(),
-            
-            "skills_in_demand": conn.execute(f"""
-                SELECT
-                    skill,
-                    COUNT(*) as demand_count,
-                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
-                FROM (
-                    SELECT TRIM(UNNEST(string_split(skills, ','))) as skill, salary_min, salary_max
-                    FROM jobs
-                    {filters}
-                )
-                WHERE skill NOT IN ('Not Specified', '')
-                GROUP BY skill
-                ORDER BY demand_count DESC
-                LIMIT 15
-            """).df(),
-        }
-
-        conn.close()
-        return metrics
+    # get_hirer_view() removed: the hirer view is served entirely by
+    # src/dashboard/hirer_data_loader.py. Its posting count was a raw COUNT(*),
+    # which reported 1,044,587 against that module's deduplicated 1,009,709 --
+    # two numbers for one caption. cohort_sizes() is the surviving definition.
 
     def get_hiring_trends(self, sector: str = None, granularity: str = 'year', year: int = None) -> pd.DataFrame:
         """
@@ -235,8 +181,7 @@ class DatabaseManager:
         sql = f"""
             SELECT
                 {period_expr} as period,
-                COUNT(*) as postings,
-                SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
+                COUNT(*) as postings
             FROM jobs
             {where_clause}
             GROUP BY period

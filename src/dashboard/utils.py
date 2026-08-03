@@ -12,7 +12,8 @@ def format_currency(value):
     """Format value as SGD currency."""
     if pd.isna(value):
         return "N/A"
-    return f"${value:,.0f}"
+    sign = "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.0f}"
 
 
 def format_currency_2dp(value):
@@ -28,6 +29,19 @@ def format_percentage(value):
     if pd.isna(value):
         return "N/A"
     return f"{value:.1f}%"
+
+
+def filter_selectbox(label, options, all_label, **kwargs):
+    """Selectbox whose first choice is an "all" sentinel meaning "don't filter".
+
+    Returns the chosen option, or None when the sentinel is picked -- the form
+    the data layer expects for "don't narrow on this dimension". `all_label` is
+    passed per call rather than derived, because the boards word it differently
+    ("All Sectors" against "All sectors"). Extra kwargs (`key`, `help`, ...) go
+    straight to st.selectbox.
+    """
+    choice = st.selectbox(label, [all_label] + list(options), **kwargs)
+    return None if choice == all_label else choice
 
 
 def create_metric_columns(data_dict):

@@ -9,14 +9,29 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import streamlit as st
 import pandas as pd
+import altair as alt
 from config.settings import STREAMLIT_CONFIG
 from src.database.database_manager import DatabaseManager
 from src.dashboard.utils import (
     create_metric_columns,
+    filter_selectbox,
     format_currency,
     format_percentage,
     create_comparison_table,
 )
+
+
+def _labeled_table(df, rename_map):
+    """Render df as a table with plain-English headers.
+
+    columns_to_show is always exactly rename_map's values, in order - deriving
+    it here instead of typing it out at each call site means renaming or
+    adding a column can't drift the two lists out of sync.
+    """
+    create_comparison_table(
+        df.rename(columns=rename_map),
+        columns_to_show=list(rename_map.values())
+    )
 
 
 def build_where_clause(sector=None, position_level=None):
@@ -48,19 +63,19 @@ def render_filters(db):
     """
     col1, col2 = st.columns(2)
     with col1:
-        sector_choice = st.selectbox(
+        sector = filter_selectbox(
             "Sector:",
-            ["All Sectors"] + db.get_sector_list(),
+            db.get_sector_list(),
+            "All Sectors",
             key="mkt_sector"
         )
     with col2:
-        level_choice = st.selectbox(
+        position_level = filter_selectbox(
             "Position Level:",
-            ["All Levels"] + fetch_position_levels(db),
+            fetch_position_levels(db),
+            "All Levels",
             key="mkt_position_level"
         )
-    sector = None if sector_choice == "All Sectors" else sector_choice
-    position_level = None if level_choice == "All Levels" else level_choice
     return sector, position_level
 
 
@@ -178,13 +193,14 @@ def render_industry_momentum(db, sector=None, position_level=None):
         return
     display_df = df.copy()
     display_df['pct_change'] = display_df['pct_change'].apply(format_percentage)
-    create_comparison_table(
-        display_df,
-        columns_to_show=[
-            'sector', 'recent_avg_monthly', 'prior_avg_monthly', 'pct_change',
-            'recent_month_count', 'prior_month_count',
-        ]
-    )
+    _labeled_table(display_df, {
+        'sector': 'Industry',
+        'recent_avg_monthly': 'Recent Avg. Postings/Month',
+        'prior_avg_monthly': 'Prior Avg. Postings/Month',
+        'pct_change': '% Change',
+        'recent_month_count': 'Recent Months Counted',
+        'prior_month_count': 'Prior Months Counted',
+    })
 
 
 def fetch_salary_trend(db, sector=None, position_level=None):
@@ -210,7 +226,17 @@ def render_salary_trend(db, sector=None, position_level=None):
         st.info("No postings match the current filters.")
         return
     st.caption(f"Median pay by month, {df['month'].iloc[0]} - {df['month'].iloc[-1]}")
-    st.line_chart(df.set_index('month')['median_pay'], use_container_width=True)
+    # st.line_chart has no axis-range control and defaults to a zero-based y-axis,
+    # which on this data (a $500 range) squeezes every real change into a sliver
+    # at the top of the chart. alt.Scale(zero=False) fits the axis to the data.
+    # Deliberately a one-off: the bar charts elsewhere in this file are correctly
+    # zero-based (they encode magnitude), so this isn't the start of a wider Altair
+    # migration - just the one line chart with a range too narrow for a zero axis.
+    chart = alt.Chart(df).mark_line(point=True).encode(
+        x=alt.X('month:O', title=None),
+        y=alt.Y('median_pay:Q', title='Median Pay ($)', scale=alt.Scale(zero=False)),
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def fetch_position_level_ranking(db, sector=None, position_level=None):
@@ -253,6 +279,44 @@ def render_category_rankings(db, sector=None, position_level=None):
                 levels['position_level'], categories=levels['position_level'], ordered=True
             )
             st.bar_chart(levels.set_index('position_level')['postings'], use_container_width=True)
+
+
+def fetch_employment_type_mix(db, sector=None, position_level=None):
+    """Return job types ranked by posting count, with median pay for each:
+    columns job_type, postings, median_pay."""
+    where = build_where_clause(sector, position_level)
+    sql = f"""
+        SELECT
+            job_type,
+            COUNT(*) AS postings,
+            ROUND(MEDIAN((salary_min + salary_max) / 2.0)) AS median_pay
+        FROM jobs
+        {where} AND job_type IS NOT NULL
+        GROUP BY job_type
+        ORDER BY postings DESC
+    """
+    return db.query(sql)
+
+
+def render_employment_type_mix(db, sector=None, position_level=None):
+    """Render the employment type breakdown: volume and median pay per type."""
+    df = fetch_employment_type_mix(db, sector, position_level)
+    st.subheader("Employment Type Mix")
+    if df.empty:
+        st.info("No postings match the current filters.")
+        return
+
+    # Pin postings-desc as the shared category order for both charts, or
+    # Vega-Lite defaults to alphabetical (matches render_category_rankings).
+    df['job_type'] = pd.Categorical(df['job_type'], categories=df['job_type'], ordered=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.caption("By postings")
+        st.bar_chart(df.set_index('job_type')['postings'], use_container_width=True)
+    with col2:
+        st.caption("By median pay")
+        st.bar_chart(df.set_index('job_type')['median_pay'], use_container_width=True)
 
 
 _MONTH_NAMES = [
@@ -309,15 +373,303 @@ def render_seasonality(db, sector=None, position_level=None):
         return
     st.bar_chart(df.set_index('month_name')['avg_postings'], use_container_width=True)
     st.caption("Years and total postings behind each bar (a thin sample, like a month covered by only one partial year, will read as unreliable):")
-    create_comparison_table(
-        df,
-        columns_to_show=['month_name', 'years_included', 'total_postings']
+    _labeled_table(df, {
+        'month_name': 'Month',
+        'years_included': 'Years of Data',
+        'total_postings': 'Total Postings',
+    })
+
+
+# Postings before this date are the platform's early onboarding ramp (Oct 2022 -
+# Feb 2023 averaged under 6k postings/month platform-wide, vs 19k+ from March 2023
+# on). Left in, that ramp would be mistaken for a real early-period baseline by
+# any analysis comparing an early window to a later one.
+WAGE_DECOMPOSITION_START_DATE = '2023-03-01'
+
+# Minimum postings a sector/position-level segment needs in BOTH the early and
+# late window to be included, so a handful of rare segments can't swing the total.
+MIN_SEGMENT_SIZE = 50
+
+
+def _ramp_excluded_where(sector=None, position_level=None):
+    """build_where_clause's filters, plus the onboarding ramp excluded."""
+    return build_where_clause(sector, position_level) + \
+        f" AND posting_date >= '{WAGE_DECOMPOSITION_START_DATE}'"
+
+
+def _early_late_windows(db, sector=None, position_level=None, window_size=3):
+    """
+    Return (early_months, late_months): the first and last `window_size`
+    distinct months present in the ramp-excluded, filtered data, as lists of
+    'YYYY-MM' strings. Sliced from one sorted list rather than two independent
+    SQL queries, so the two windows can never overlap regardless of how few
+    months are available.
+
+    Returns (None, None) when fewer than 2*window_size distinct months are
+    available, so callers can show an "insufficient data" message instead.
+    """
+    where = _ramp_excluded_where(sector, position_level)
+    months = db.query(
+        f"SELECT DISTINCT strftime(posting_date, '%Y-%m') AS ym FROM jobs {where} ORDER BY ym"
+    )['ym'].tolist()
+    if len(months) < 2 * window_size:
+        return None, None
+    return months[:window_size], months[-window_size:]
+
+
+def _sql_month_list(months):
+    """Quote a list of 'YYYY-MM' strings for a SQL IN (...) clause."""
+    return ", ".join(f"'{m}'" for m in months)
+
+
+def fetch_wage_decomposition(db, sector=None, position_level=None, windows=None):
+    """
+    Split the pay change between the earliest and latest 3 months of data into
+    two parts: real wage growth within the same sector/position-level segments
+    (the "within" effect), versus the market simply posting more of its higher-
+    or lower-paying segments (the "mix" effect).
+
+    Method: hold segment weights fixed at the early window's mix, and price
+    them at the late window's pay rates ("late_pay_at_early_mix"). The gap from
+    actual_early to that bridge value is pure wage movement; the gap from the
+    bridge value to actual_late is pure mix movement. The two always sum
+    exactly to the headline change.
+
+    Only segments with at least MIN_SEGMENT_SIZE postings in both windows are
+    included (total_early_all/total_late_all report the unrestricted postings
+    in each window, so callers can show how much was excluded).
+
+    windows: optional (early_months, late_months) pair from a prior
+    _early_late_windows() call, for a caller (render_wage_decomposition) that
+    also needs the same windows for fetch_sector_mix_shift and would otherwise
+    trigger that query twice. Computed internally when omitted.
+    """
+    early_months, late_months = windows if windows is not None else \
+        _early_late_windows(db, sector, position_level)
+    if early_months is None:
+        return pd.DataFrame()
+
+    where = _ramp_excluded_where(sector, position_level)
+    early_sql = _sql_month_list(early_months)
+    late_sql = _sql_month_list(late_months)
+    sql = f"""
+        WITH filtered AS (
+            SELECT sector, position_level, strftime(posting_date, '%Y-%m') AS ym,
+                   (salary_min + salary_max) / 2.0 AS pay
+            FROM jobs
+            {where}
+        ),
+        segment AS (
+            SELECT
+                sector, position_level,
+                AVG(pay) FILTER (WHERE ym IN ({early_sql})) AS pay_early,
+                AVG(pay) FILTER (WHERE ym IN ({late_sql}))  AS pay_late,
+                COUNT(*) FILTER (WHERE ym IN ({early_sql})) AS n_early,
+                COUNT(*) FILTER (WHERE ym IN ({late_sql}))  AS n_late
+            FROM filtered
+            GROUP BY sector, position_level
+        ),
+        valid AS (
+            SELECT * FROM segment
+            WHERE n_early >= {MIN_SEGMENT_SIZE} AND n_late >= {MIN_SEGMENT_SIZE}
+        )
+        SELECT
+            COUNT(*)::INTEGER AS n_segments,
+            SUM(n_early)::INTEGER AS n_early_total,
+            SUM(n_late)::INTEGER AS n_late_total,
+            (SELECT SUM(n_early) FROM segment) AS total_early_all,
+            (SELECT SUM(n_late)  FROM segment) AS total_late_all,
+            SUM(pay_early * n_early) / NULLIF(SUM(n_early), 0) AS actual_early,
+            SUM(pay_late  * n_late)  / NULLIF(SUM(n_late), 0)  AS actual_late,
+            SUM(pay_late  * n_early) / NULLIF(SUM(n_early), 0) AS late_pay_at_early_mix
+        FROM valid
+    """
+    df = db.query(sql)
+    df['early_window_label'] = f"{early_months[0]} to {early_months[-1]}"
+    df['late_window_label'] = f"{late_months[0]} to {late_months[-1]}"
+    return df
+
+
+def fetch_sector_mix_shift(db, position_level=None, limit=8, windows=None):
+    """
+    Return the sectors whose share of postings changed the most between the
+    early and late windows used by fetch_wage_decomposition. This is the detail
+    behind that function's "mix effect": a sector gaining share pulls overall
+    pay toward its own pay level even when nobody's individual wage moved.
+
+    windows: see fetch_wage_decomposition - reuse its windows when the caller
+    already computed them, instead of re-querying for the same months.
+    """
+    early_months, late_months = windows if windows is not None else \
+        _early_late_windows(db, sector=None, position_level=position_level)
+    if early_months is None:
+        return pd.DataFrame()
+
+    where = _ramp_excluded_where(sector=None, position_level=position_level)
+    early_sql = _sql_month_list(early_months)
+    late_sql = _sql_month_list(late_months)
+    sql = f"""
+        WITH filtered AS (
+            SELECT sector, strftime(posting_date, '%Y-%m') AS ym
+            FROM jobs
+            {where}
+        ),
+        totals AS (
+            SELECT
+                COUNT(*) FILTER (WHERE ym IN ({early_sql})) AS total_early,
+                COUNT(*) FILTER (WHERE ym IN ({late_sql}))  AS total_late
+            FROM filtered
+        )
+        SELECT
+            sector,
+            COUNT(*) FILTER (WHERE ym IN ({early_sql})) * 100.0
+                / NULLIF((SELECT total_early FROM totals), 0) AS share_early_pct,
+            COUNT(*) FILTER (WHERE ym IN ({late_sql})) * 100.0
+                / NULLIF((SELECT total_late FROM totals), 0) AS share_late_pct
+        FROM filtered
+        GROUP BY sector
+    """
+    df = db.query(sql)
+    if df.empty:
+        return df
+    df['share_change_pct'] = df['share_late_pct'] - df['share_early_pct']
+    return (
+        df.reindex(df['share_change_pct'].abs().sort_values(ascending=False).index)
+        .head(limit)
+        .reset_index(drop=True)
     )
+
+
+# Keyword match on company name, used only to flag likely staffing/recruitment
+# agencies for the concentration caveat below - not a verified employer registry,
+# so treat matches as "looks like an agency," not a confirmed classification.
+_AGENCY_NAME_PATTERN = (
+    r'RECRUIT|STAFFING|MANPOWER|\bHR\b|HUMAN RESOURCE|TALENT|CONSULTANC|'
+    r'EMPLOYMENT|OUTSOURC|HEADHUNT|PLACEMENT|ADVISORY'
+)
+
+
+def fetch_top_companies(db, sector=None, position_level=None, limit=10):
+    """Return the top companies by posting count, each with its share of all
+    postings in the current filter: columns company, postings, share_pct."""
+    where = build_where_clause(sector, position_level)
+    sql = f"""
+        WITH ranked AS (
+            SELECT company, COUNT(*) AS postings
+            FROM jobs
+            {where}
+            GROUP BY company
+            ORDER BY postings DESC
+            LIMIT {int(limit)}
+        )
+        SELECT company, postings, postings * 100.0 / (SELECT COUNT(*) FROM jobs {where}) AS share_pct
+        FROM ranked
+    """
+    return db.query(sql)
+
+
+def render_market_concentration(db, sector=None, position_level=None):
+    """Render the top-companies table and the total share they hold, flagging
+    which look like staffing/recruitment agencies rather than direct employers."""
+    df = fetch_top_companies(db, sector, position_level)
+    st.subheader("Market Concentration: Top Companies")
+    if df.empty:
+        st.info("No postings match the current filters.")
+        return
+
+    df['likely_agency'] = df['company'].str.contains(_AGENCY_NAME_PATTERN, case=False, regex=True)
+    total_share = df['share_pct'].sum()
+    agency_share = df.loc[df['likely_agency'], 'share_pct'].sum()
+
+    create_metric_columns({
+        "Top 10 Companies' Share": format_percentage(total_share),
+        "...of which, likely agencies": format_percentage(agency_share),
+    })
+    st.caption(
+        "\"Likely agency\" is a name match (e.g. containing \"Recruit\", \"Staffing\", "
+        "\"Advisory\"), not a verified list. When most of a top employer's volume is "
+        "staffing agencies, that ranking reflects posting activity, not who is actually "
+        "hiring - a useful caveat anywhere else in the dashboard that surfaces \"top companies.\""
+    )
+    display_df = df.copy()
+    display_df['share_pct'] = display_df['share_pct'].apply(format_percentage)
+    _labeled_table(display_df, {
+        'company': 'Company',
+        'postings': 'Postings',
+        'share_pct': 'Share of Market',
+        'likely_agency': 'Likely Recruitment Agency',
+    })
+
+
+def render_wage_decomposition(db, sector=None, position_level=None):
+    """Render the wage-growth decomposition and, for the unfiltered view, the
+    sector share shifts behind its mix effect."""
+    # Computed once and passed to both fetch calls below: with no sector filter,
+    # fetch_sector_mix_shift would otherwise recompute the identical windows.
+    windows = _early_late_windows(db, sector, position_level)
+    result = fetch_wage_decomposition(db, sector, position_level, windows=windows)
+    st.subheader("Wage Growth: Real Increase vs. Market Mix Shift")
+
+    row = result.iloc[0] if not result.empty else None
+    if row is None or pd.isna(row['actual_early']):
+        st.info(
+            f"Not enough data in this selection to decompose wage growth (need at "
+            f"least 6 distinct months after {WAGE_DECOMPOSITION_START_DATE}, with "
+            f"each sector/position-level segment having at least {MIN_SEGMENT_SIZE} "
+            f"postings in both the earliest and latest 3-month windows)."
+        )
+        return
+
+    total_change = row['actual_late'] - row['actual_early']
+    within_effect = row['late_pay_at_early_mix'] - row['actual_early']
+    mix_effect = row['actual_late'] - row['late_pay_at_early_mix']
+    excluded_early = int(row['total_early_all'] - row['n_early_total'])
+    excluded_late = int(row['total_late_all'] - row['n_late_total'])
+
+    st.caption(
+        f"Comparing {row['early_window_label']} to {row['late_window_label']}, "
+        f"across {int(row['n_segments'])} sector x position-level segments with at "
+        f"least {MIN_SEGMENT_SIZE} postings in both windows "
+        f"({int(row['n_early_total']):,} and {int(row['n_late_total']):,} postings; "
+        f"{excluded_early:,} early and {excluded_late:,} late postings fell in "
+        f"thinner segments and are excluded)."
+    )
+    create_metric_columns({
+        "Pay Change (Matched Segments)": format_currency(total_change),
+        "From Real Wage Growth": format_currency(within_effect),
+        "From Market Mix Shift": format_currency(mix_effect),
+    })
+    st.caption(
+        "Real wage growth is the pay change within the same sector and position "
+        "level. Market mix shift is the effect of the market posting relatively "
+        "more (or fewer) jobs in higher- or lower-paying segments - it can mask "
+        "or exaggerate the headline number even when nobody's actual pay moved. "
+        "This figure is restricted to segments with enough postings in both "
+        "windows to compare, so it can differ from the overall Median Pay above."
+    )
+
+    if sector is not None:
+        st.caption('Sector mix-shift detail is shown only for "All Sectors".')
+        return
+
+    shift_df = fetch_sector_mix_shift(db, position_level, windows=windows)
+    if shift_df.empty:
+        return
+    st.caption("Sectors with the biggest change in share of postings:")
+    display_df = shift_df.copy()
+    for col in ['share_early_pct', 'share_late_pct', 'share_change_pct']:
+        display_df[col] = display_df[col].apply(format_percentage)
+    _labeled_table(display_df, {
+        'sector': 'Industry',
+        'share_early_pct': 'Early Period Share',
+        'share_late_pct': 'Late Period Share',
+        'share_change_pct': 'Change in Share',
+    })
 
 
 def render_market_overview_view():
     """
-    Render the board's own header, filters, and all five sections. Composable
+    Render the board's own header, filters, and all eight sections. Composable
     entry point for a shell that already has session state set up (e.g.
     app.py) — matches render_hirer_view()/render_seeker_view()'s
     zero-argument calling convention and self-contained header style.
@@ -334,9 +686,15 @@ def render_market_overview_view():
     st.divider()
     render_salary_trend(db, sector, position_level)
     st.divider()
+    render_wage_decomposition(db, sector, position_level)
+    st.divider()
     render_category_rankings(db, sector, position_level)
     st.divider()
+    render_employment_type_mix(db, sector, position_level)
+    st.divider()
     render_seasonality(db, sector, position_level)
+    st.divider()
+    render_market_concentration(db, sector, position_level)
 
 
 def main():
