@@ -5,8 +5,8 @@ Handles connections, queries, data insertion (raw and processed layers).
 import duckdb
 import pandas as pd
 import json
-from config.settings import DUCKDB_FILE
-from src.database.schema import JOBS_SCHEMA
+from config.settings import DUCKDB_FILE, RAW_CSV_PATH
+from src.database.schema import JOBS_SCHEMA, initialize_database
 
 
 class DatabaseManager:
@@ -15,9 +15,9 @@ class DatabaseManager:
     def __init__(self):
         self.db_path = DUCKDB_FILE
     
-    def get_connection(self):
+    def get_connection(self, read_only: bool = False):
         """Get a DuckDB connection."""
-        return duckdb.connect(self.db_path)
+        return duckdb.connect(self.db_path, read_only=read_only)
     
     def insert_raw_jobs(self, df: pd.DataFrame) -> int:
         """
@@ -138,67 +138,23 @@ class DatabaseManager:
             conn.close()
             return 0
     
-    def query(self, sql: str) -> pd.DataFrame:
-        """Execute SQL query and return results as DataFrame."""
-        conn = self.get_connection()
-        result = conn.execute(sql).df()
-        conn.close()
-        return result
+    def query(self, sql: str, read_only: bool = False) -> pd.DataFrame:
+        """Execute SQL query and return results as DataFrame.
+
+        Closed in a finally: a query that raises must still release the file
+        lock, or the caller's next attempt fails for a reason unrelated to the
+        one that actually broke.
+        """
+        conn = self.get_connection(read_only=read_only)
+        try:
+            return conn.execute(sql).df()
+        finally:
+            conn.close()
     
-    def get_hirer_view(self, sector: str = None) -> dict:
-        """
-        Get metrics for hirer view.
-        Focused on: demand, hiring trends, required skills.
-        """
-        conn = self.get_connection()
-        
-        filters = ""
-        if sector:
-            filters = f"WHERE sector = '{sector}'"
-        
-        metrics = {
-            "market_overview": conn.execute(f"""
-                SELECT 
-                    COUNT(*) as total_postings,
-                    COUNT(DISTINCT company) as num_companies,
-                    COUNT(DISTINCT title) as unique_roles,
-                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
-                FROM jobs
-                {filters}
-            """).df(),
-
-            "top_roles": conn.execute(f"""
-                SELECT
-                    title,
-                    COUNT(*) as postings,
-                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary,
-                    COUNT(DISTINCT company) as companies
-                FROM jobs
-                {filters}
-                GROUP BY title
-                ORDER BY postings DESC
-                LIMIT 10
-            """).df(),
-            
-            "skills_in_demand": conn.execute(f"""
-                SELECT
-                    skill,
-                    COUNT(*) as demand_count,
-                    SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
-                FROM (
-                    SELECT TRIM(UNNEST(string_split(skills, ','))) as skill, salary_min, salary_max
-                    FROM jobs
-                    {filters}
-                )
-                WHERE skill NOT IN ('Not Specified', '')
-                GROUP BY skill
-                ORDER BY demand_count DESC
-                LIMIT 15
-            """).df(),
-        }
-
-        conn.close()
-        return metrics
+    # get_hirer_view() removed: the hirer view is served entirely by
+    # src/dashboard/hirer_data_loader.py. Its posting count was a raw COUNT(*),
+    # which reported 1,044,587 against that module's deduplicated 1,009,709 --
+    # two numbers for one caption. cohort_sizes() is the surviving definition.
 
     def get_hiring_trends(self, sector: str = None, granularity: str = 'year', year: int = None) -> pd.DataFrame:
         """
@@ -224,8 +180,7 @@ class DatabaseManager:
         sql = f"""
             SELECT
                 {period_expr} as period,
-                COUNT(*) as postings,
-                SUM(salary_min + salary_max) / (2 * COUNT(*)) as avg_salary
+                COUNT(*) as postings
             FROM jobs
             {where_clause}
             GROUP BY period
@@ -239,8 +194,24 @@ class DatabaseManager:
         Focused on: opportunities, benchmarks, market competition.
         """
         conn = self.get_connection()
-        
-        filters = "WHERE 1=1"
+
+        salary_filter = (
+            "salary_min IS NOT NULL AND salary_max IS NOT NULL "
+            "AND salary_min >= 500 AND salary_max <= 100000 "
+            "AND (seniority_years IS NULL OR seniority_years <= 30)"
+        )
+        try:
+            table_info = conn.execute("PRAGMA table_info('jobs')").fetchall()
+            if any(col[1] == 'salary_flag' for col in table_info):
+                salary_filter = (
+                    "salary_flag = 'ok' AND salary_min IS NOT NULL AND salary_max IS NOT NULL "
+                    "AND salary_min >= 500 AND salary_max <= 100000 "
+                    "AND (seniority_years IS NULL OR seniority_years <= 30)"
+                )
+        except Exception:
+            pass
+
+        filters = f"WHERE {salary_filter}"
         if experience_level:
             filters += f" AND experience_level = '{experience_level}'"
         if sector:
@@ -278,12 +249,12 @@ class DatabaseManager:
                     MIN(salary_min) as p25,
                     AVG(salary_min) as median_entry,
                     AVG(salary_max) as median_max,
-                    MAX(salary_max) as p90
+                    MAX(salary_max) as p90,
+                    COUNT(*) as count_samples
                 FROM jobs
                 {filters}
                 GROUP BY title, experience_level
                 ORDER BY median_max DESC
-                LIMIT 10
             """).df(),
             
             "competitive_skills": conn.execute(f"""

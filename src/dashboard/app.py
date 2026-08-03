@@ -24,20 +24,19 @@ VIEWS = {
 }
 
 
-# Custom CSS
-st.markdown("""
+# Streamlit reserves 6rem above the first element in wide layout, more than the
+# charts can spare. There is no native setting for it, so it is trimmed here.
+# The floor is the toolbar: it overlays the page at 60px tall, so anything under
+# 3.75rem slides beneath it and the first row gets clipped.
+st.html("""
 <style>
-    .main {
+    .block-container, [data-testid="stMainBlockContainer"] {
         max-width: 1400px;
-    }
-    .metric-card {
-        padding: 20px;
-        border-radius: 10px;
-        background-color: #f0f2f6;
-        margin: 10px 0;
+        padding-top: 4.5rem;
+        padding-bottom: 2rem;
     }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
 def ensure_data():
@@ -68,32 +67,32 @@ def initialize_session():
 
 
 def render_header():
-    """Render main header."""
-    col1, col2 = st.columns([3, 1])
+    """Title and view switch on one line, so the charts start higher up."""
+    col1, col2 = st.columns([2, 3], vertical_alignment="center")
     with col1:
-        st.title("📊 Singapore Jobs Analytics")
-        st.markdown("*Market insights for hirers and job seekers*")
+        st.markdown("#### 📊 Singapore Jobs Analytics")
     with col2:
-        view_mode = st.radio(
-            "Select View:",
-            list(VIEWS),
-            horizontal=True
+        selected = st.segmented_control(
+            "Select view", list(VIEWS),
+            default=st.session_state.view_mode,
+            label_visibility="collapsed",
+            key="view_switch",
         )
-        st.session_state.view_mode = view_mode
+    # Clicking the active segment clears the selection; stay on the current board.
+    st.session_state.view_mode = selected or st.session_state.view_mode
 
 
 def main():
     """Main application entry point."""
     initialize_session()
-    
+
     render_header()
-    
+
     st.divider()
-    
+
     # Route to appropriate view
     VIEWS[st.session_state.view_mode]()
-    
-    # Footer
+
     st.divider()
     st.markdown("""
     ---

@@ -3,12 +3,30 @@ Job seeker's dashboard view.
 """
 import pandas as pd
 import streamlit as st
-from src.dashboard.utils import format_currency, create_metric_columns
+from src.dashboard.utils import (
+    format_currency,
+    format_currency_2dp,
+    filter_selectbox,
+    create_metric_columns,
+)
+from src.pipeline.feature_enrichment import derive_ssoc_job_label
 
 
 def build_where_clause(sector=None, experience_level=None, seniority_years=None):
-    """Build a composable SQL WHERE clause for seeker analytics."""
-    conditions = ["posting_date IS NOT NULL"]
+    """Build a composable SQL WHERE clause for seeker analytics.
+
+    The current processed jobs table does not include a ``salary_flag`` column,
+    so the query falls back to filtering on the salary bounds directly and caps
+    experience at a realistic upper bound.
+    """
+    conditions = [
+        "posting_date IS NOT NULL",
+        "salary_min IS NOT NULL",
+        "salary_max IS NOT NULL",
+        "salary_min >= 500",
+        "salary_max <= 100000",
+        "(seniority_years IS NULL OR seniority_years <= 30)",
+    ]
     if sector:
         conditions.append(f"sector = '{sector}'")
     if experience_level:
@@ -77,7 +95,10 @@ def fetch_pay_range_by_industry_level(db, industry=None, limit=10):
         SELECT
             sector,
             experience_level,
-            ROUND(MAX(salary_max) - MIN(salary_min)) AS pay_range
+            ROUND(
+                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY (salary_min + salary_max) / 2.0)
+                - PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY (salary_min + salary_max) / 2.0)
+            ) AS pay_range
         FROM jobs
         {where}
         AND sector IS NOT NULL AND experience_level IS NOT NULL
@@ -100,10 +121,28 @@ def fetch_competition_metrics(db, industry=None, experience_level=None, limit=10
         FROM jobs
         {where}
         GROUP BY title
-        ORDER BY competition_ratio DESC, postings DESC
-        LIMIT {int(limit)}
     """
-    return db.query(sql)
+    df = db.query(sql)
+    if not df.empty:
+        df['job_label'] = df['title'].apply(lambda t: derive_ssoc_job_label(t, None, None))
+        df = (
+            df
+            .groupby('job_label', observed=True, as_index=False)
+            .agg(
+                job_label=('job_label', 'first'),
+                postings=('postings', 'sum'),
+                competition_ratio=('competition_ratio', 'mean'),
+                median_salary=('median_salary', 'mean')
+            )
+        )
+        top_n = int(limit / 2) + (limit % 2)
+        high = df.sort_values(['competition_ratio', 'postings'], ascending=[False, False]).head(top_n).copy()
+        low = df.sort_values(['competition_ratio', 'postings'], ascending=[True, False]).head(int(limit / 2)).copy()
+        high['competition_type'] = 'High'
+        low['competition_type'] = 'Low'
+        df = pd.concat([high, low], ignore_index=True)
+        df = df.sort_values(['competition_type', 'competition_ratio', 'postings'], ascending=[False, False, False])
+    return df
 
 
 def make_unique_categorical(values, ordered=True):
@@ -120,15 +159,17 @@ def render_seeker_view():
     col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
     with col1:
-        industry_filter = st.selectbox(
+        industry = filter_selectbox(
             "Industry:",
-            ["All Industries"] + st.session_state.db.get_sector_list(),
+            st.session_state.db.get_sector_list(),
+            "All Industries",
             key="seeker_industry"
         )
     with col2:
-        exp_level = st.selectbox(
+        exp = filter_selectbox(
             "Your Experience Level:",
-            ["All Levels", "Entry Level", "Mid Level", "Senior"],
+            ["Entry Level", "Mid Level", "Senior"],
+            "All Levels",
             key="seeker_exp"
         )
     with col3:
@@ -140,10 +181,7 @@ def render_seeker_view():
             key="seeker_salary"
         )
     with col4:
-        st.write("")
-
-    industry = None if industry_filter == "All Industries" else industry_filter
-    exp = None if exp_level == "All Levels" else exp_level
+        st.write("")  # Spacing
 
     metrics = st.session_state.db.get_seeker_view(experience_level=exp, sector=industry)
     percentile_df = fetch_salary_percentile(st.session_state.db, industry=industry, experience_level=exp, salary=salary_input)
@@ -151,6 +189,51 @@ def render_seeker_view():
     ladder_df = fetch_seniority_ladder(st.session_state.db, industry=industry)
     pay_range_df = fetch_pay_range_by_industry_level(st.session_state.db, industry=industry, limit=10)
     competition_df = fetch_competition_metrics(st.session_state.db, industry=industry, experience_level=exp, limit=10)
+
+    if not metrics['top_roles'].empty:
+        metrics['top_roles']['job_label'] = metrics['top_roles']['title'].apply(
+            lambda t: derive_ssoc_job_label(t, None, None)
+        )
+        metrics['top_roles'] = (
+            metrics['top_roles']
+            .groupby('job_label', observed=True, as_index=False)
+            .agg(
+                opportunities=('opportunities', 'sum'),
+                avg_salary=('avg_salary', 'mean'),
+                num_companies=('num_companies', 'sum')
+            )
+            .sort_values('opportunities', ascending=False)
+        )
+        metrics['top_roles']['avg_salary'] = metrics['top_roles']['avg_salary'].apply(format_currency_2dp)
+
+    if not metrics['salary_benchmarks'].empty:
+        metrics['salary_benchmarks']['job_label'] = metrics['salary_benchmarks']['title'].apply(
+            lambda t: derive_ssoc_job_label(t, None, None)
+        )
+        metrics['salary_benchmarks'] = (
+            metrics['salary_benchmarks']
+            .groupby(['job_label', 'experience_level'], observed=True, as_index=False)
+            .agg(
+                experience_level=('experience_level', 'first'),
+                median_entry=('median_entry', 'mean'),
+                median_max=('median_max', 'mean'),
+                p90=('p90', 'max'),
+                count_samples=('count_samples', 'sum')
+            )
+            .sort_values('median_max', ascending=False)
+        )
+        # Some pandas builds may not expose DataFrame.applymap; use a
+        # column-wise mapping which is more portable across pandas versions.
+        for col in ['median_entry', 'median_max', 'p90']:
+            if col in metrics['salary_benchmarks'].columns:
+                metrics['salary_benchmarks'][col] = metrics['salary_benchmarks'][col].map(format_currency_2dp)
+        valid_labels = (
+            metrics['salary_benchmarks']
+            .groupby('job_label')['count_samples']
+            .transform('sum')
+            >= 200
+        )
+        metrics['salary_benchmarks'] = metrics['salary_benchmarks'][valid_labels]
 
     # Opportunities overview
     if not metrics['opportunities'].empty:
@@ -206,13 +289,16 @@ def render_seeker_view():
 
     st.subheader("Competition Per Opening")
     if not competition_df.empty:
+        competition_df['median_salary'] = competition_df['median_salary'].apply(format_currency_2dp)
+        competition_df = competition_df.rename(columns={
+            'job_label': 'Role',
+            'postings': 'Postings',
+            'competition_ratio': 'Competition / Opening',
+            'median_salary': 'Median Salary ($)',
+            'competition_type': 'Competition Type'
+        })
         st.dataframe(
-            competition_df.rename(columns={
-                'title': 'Role',
-                'postings': 'Postings',
-                'competition_ratio': 'Competition / Opening',
-                'median_salary': 'Median Salary'
-            }),
+            competition_df[['Role', 'Competition Type', 'Postings', 'Competition / Opening', 'Median Salary ($)']],
             use_container_width=True,
             hide_index=True
         )
@@ -222,9 +308,9 @@ def render_seeker_view():
     if not metrics['top_roles'].empty:
         st.dataframe(
             metrics['top_roles'].head(10).rename(columns={
-                'title': 'Role',
+                'role': 'Role',
                 'opportunities': 'Postings',
-                'avg_salary': 'Avg Salary',
+                'avg_salary': 'Avg Salary ($)',
                 'num_companies': 'Companies'
             }),
             use_container_width=True,
@@ -236,11 +322,11 @@ def render_seeker_view():
     if not metrics['salary_benchmarks'].empty:
         st.dataframe(
             metrics['salary_benchmarks'].head(10).rename(columns={
-                'title': 'Role',
+                'role': 'Role',
                 'experience_level': 'Level',
-                'p25': 'Entry',
-                'median_max': 'Market Rate',
-                'p90': 'Top 10%'
+                'p25': 'Entry ($)',
+                'median_max': 'Market Rate ($)',
+                'p90': 'Top 10% ($)'
             }),
             use_container_width=True,
             hide_index=True
