@@ -12,7 +12,8 @@ def format_currency(value):
     """Format value as SGD currency."""
     if pd.isna(value):
         return "N/A"
-    return f"${value:,.0f}"
+    sign = "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.0f}"
 
 
 @st.cache_data
