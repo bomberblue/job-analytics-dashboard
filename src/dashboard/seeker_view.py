@@ -124,25 +124,18 @@ def render_seeker_view():
     col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
     with col1:
-        exp = filter_selectbox(
-        industry_filter = st.selectbox(
+        industry = filter_selectbox(
             "Industry:",
-            ["All Industries"] + st.session_state.db.get_sector_list(),
+            st.session_state.db.get_sector_list(),
+            "All Industries",
             key="seeker_industry"
         )
     with col2:
-        exp_level = st.selectbox(
+        exp = filter_selectbox(
             "Your Experience Level:",
             ["Entry Level", "Mid Level", "Senior"],
             "All Levels",
             key="seeker_exp"
-        )
-    with col2:
-        sector = filter_selectbox(
-            "Preferred Sector:",
-            st.session_state.db.get_sector_list(),
-            "All Sectors",
-            key="seeker_sector"
         )
     with col3:
         salary_input = st.number_input(
@@ -153,11 +146,7 @@ def render_seeker_view():
             key="seeker_salary"
         )
     with col4:
-        st.write("")
-
-    metrics = st.session_state.db.get_seeker_view(experience_level=exp, sector=sector)
-    industry = None if industry_filter == "All Industries" else industry_filter
-    exp = None if exp_level == "All Levels" else exp_level
+        st.write("")  # Spacing
 
     metrics = st.session_state.db.get_seeker_view(experience_level=exp, sector=industry)
     percentile_df = fetch_salary_percentile(st.session_state.db, industry=industry, experience_level=exp, salary=salary_input)
