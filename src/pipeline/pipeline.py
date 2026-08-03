@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.pipeline.data_cleaning import clean_dataset, assert_no_dead_columns
 from src.pipeline.feature_enrichment import feature_enrichment, JOBS_SCHEMA_COLUMNS
+from src.pipeline.finance_feature_pipeline import materialize_finance_feature_tables
 from src.database.database_manager import DatabaseManager
 from src.database.schema import initialize_database
 from config.settings import RAW_CSV_PATH, DATA_PROCESSED
@@ -88,12 +89,25 @@ class DataPipeline:
         self.save_parquet(enriched)
 
         success = self.load_processed(enriched)
+        finance_counts = None
+
+        if success:
+            print("\n💼 STAGE 4: Building finance workforce-cost feature tables...")
+            finance_counts = materialize_finance_feature_tables(self.db.db_path)
+            print(
+                "✅ Finance feature tables ready: "
+                f"finance_job_features={finance_counts['finance_job_features']:,}, "
+                f"finance_industry_budget_risk={finance_counts['finance_industry_budget_risk']:,}, "
+                "finance_permanent_contract_conversion_economics="
+                f"{finance_counts['finance_permanent_contract_conversion_economics']:,}"
+            )
 
         print("\n" + "="*60)
         if success:
             print("✅ PIPELINE COMPLETE - All layers loaded successfully")
             print("   Raw layer:       raw_jobs_flat (audit trail)")
             print("   Processed layer: jobs (analytical queries)")
+            print("   Finance layer:   finance_* (cost & budget risk features)")
         else:
             print("✗ PIPELINE FAILED")
         print("="*60 + "\n")
