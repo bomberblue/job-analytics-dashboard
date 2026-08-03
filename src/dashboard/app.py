@@ -20,7 +20,7 @@ VIEWS = {
     "Market Overview": render_market_overview_view,
     "Hirer": render_hirer_view,
     "Seeker": render_seeker_view,
-    "Finance Partner": render_finance_view,
+    "Finance Partner": render_finance_view ,
 }
 
 

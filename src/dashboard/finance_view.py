@@ -426,60 +426,57 @@ def render_finance_view():
             hide_index=True,
         )
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.caption("Top Savings Candidates")
-            savings = _fetch_conversion_candidates(db, selected_year, selected_sector, selected_sub_sector, skill_keyword, "Savings")
-            if savings.empty:
-                st.info("No savings candidates in current dataset.")
-            else:
-                savings_show = savings.copy()
-                savings_show["contract_cost_delta_rate"] = savings_show["contract_cost_delta_rate"].apply(format_percentage)
-                savings_show["monthly_cost_delta_contract_minus_permanent"] = savings_show[
-                    "monthly_cost_delta_contract_minus_permanent"
-                ].apply(format_currency)
-                st.dataframe(
-                    savings_show.rename(
-                        columns={
-                            "sector": "Sector",
-                            "sub_sector": "Sub-sector",
-                            "position_level": "Position Level",
-                            "postings_contract": "Contract Postings",
-                            "postings_permanent": "Permanent Postings",
-                            "monthly_cost_delta_contract_minus_permanent": "Monthly Delta",
-                            "contract_cost_delta_rate": "Delta Rate",
-                        }
-                    ),
-                    width="stretch",
-                    hide_index=True,
-                )
+        st.caption("Top Savings Candidates")
+        savings = _fetch_conversion_candidates(db, selected_year, selected_sector, selected_sub_sector, skill_keyword, "Savings")
+        if savings.empty:
+            st.info("No savings candidates in current dataset.")
+        else:
+            savings_show = savings.copy()
+            savings_show["contract_cost_delta_rate"] = savings_show["contract_cost_delta_rate"].apply(format_percentage)
+            savings_show["monthly_cost_delta_contract_minus_permanent"] = savings_show[
+                "monthly_cost_delta_contract_minus_permanent"
+            ].apply(format_currency)
+            st.dataframe(
+                savings_show.rename(
+                    columns={
+                        "sector": "Sector",
+                        "sub_sector": "Sub-sector",
+                        "position_level": "Position Level",
+                        "postings_contract": "Contract Postings",
+                        "postings_permanent": "Permanent Postings",
+                        "monthly_cost_delta_contract_minus_permanent": "Monthly Delta",
+                        "contract_cost_delta_rate": "Delta Rate",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
 
-        with col2:
-            st.caption("Top Cost Premium Risks")
-            premium = _fetch_conversion_candidates(db, selected_year, selected_sector, selected_sub_sector, skill_keyword, "Cost premium")
-            if premium.empty:
-                st.info("No cost premium candidates in current dataset.")
-            else:
-                premium_show = premium.copy()
-                premium_show["contract_cost_delta_rate"] = premium_show["contract_cost_delta_rate"].apply(format_percentage)
-                premium_show["monthly_cost_delta_contract_minus_permanent"] = premium_show[
-                    "monthly_cost_delta_contract_minus_permanent"
-                ].apply(format_currency)
-                st.dataframe(
-                    premium_show.rename(
-                        columns={
-                            "sector": "Sector",
-                            "sub_sector": "Sub-sector",
-                            "position_level": "Position Level",
-                            "postings_contract": "Contract Postings",
-                            "postings_permanent": "Permanent Postings",
-                            "monthly_cost_delta_contract_minus_permanent": "Monthly Delta",
-                            "contract_cost_delta_rate": "Delta Rate",
-                        }
-                    ),
-                    width="stretch",
-                    hide_index=True,
-                )
+        st.caption("Top Cost Premium Risks")
+        premium = _fetch_conversion_candidates(db, selected_year, selected_sector, selected_sub_sector, skill_keyword, "Cost premium")
+        if premium.empty:
+            st.info("No cost premium candidates in current dataset.")
+        else:
+            premium_show = premium.copy()
+            premium_show["contract_cost_delta_rate"] = premium_show["contract_cost_delta_rate"].apply(format_percentage)
+            premium_show["monthly_cost_delta_contract_minus_permanent"] = premium_show[
+                "monthly_cost_delta_contract_minus_permanent"
+            ].apply(format_currency)
+            st.dataframe(
+                premium_show.rename(
+                    columns={
+                        "sector": "Sector",
+                        "sub_sector": "Sub-sector",
+                        "position_level": "Position Level",
+                        "postings_contract": "Contract Postings",
+                        "postings_permanent": "Permanent Postings",
+                        "monthly_cost_delta_contract_minus_permanent": "Monthly Delta",
+                        "contract_cost_delta_rate": "Delta Rate",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
 
     st.subheader("Decision 2: Where Vacancy Cost Exposure Concentrates by Position Level")
     top_positions = _fetch_exposure_by_position_level(db, selected_year, selected_sector, selected_sub_sector, skill_keyword, limit=12)
