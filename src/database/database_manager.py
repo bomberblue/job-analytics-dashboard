@@ -15,9 +15,9 @@ class DatabaseManager:
     def __init__(self):
         self.db_path = DUCKDB_FILE
     
-    def get_connection(self):
+    def get_connection(self, read_only: bool = False):
         """Get a DuckDB connection."""
-        return duckdb.connect(self.db_path)
+        return duckdb.connect(self.db_path, read_only=read_only)
     
     def insert_raw_jobs(self, df: pd.DataFrame) -> int:
         """
