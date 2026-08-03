@@ -13,13 +13,14 @@ graph TB
     subgraph "3. Database Layer"
         SCHEMA["schema.py<br/>DEFINE SCHEMA<br/>• jobs table<br/>• benchmarks<br/>• trends<br/>• skills_demand"]
         DB["DuckDB<br/>jobs.duckdb<br/>FAST ANALYTICS"]
-        DBMGR["database_manager.py<br/>QUERY BUILDER<br/>• get_hirer_view()<br/>• get_seeker_view()"]
+        DBMGR["database_manager.py<br/>QUERY BUILDER<br/>• get_seeker_view()<br/>• get_hiring_trends()"]
     end
 
     subgraph "4. Dashboard Layer"
         APP["app.py<br/>MAIN DASHBOARD<br/>• Role selector<br/>• Navigation"]
         HIRER["Hirer View<br/>👔 RECRUITMENT FOCUS<br/>• Market overview<br/>• Top roles<br/>• Skills demand<br/>• Hiring trends"]
         SEEKER["Seeker View<br/>🔍 JOB SEARCH FOCUS<br/>• Opportunities<br/>• Top roles<br/>• Benchmarks<br/>• Skill premium"]
+        DL["hirer_data_loader.py<br/>MARKET COHORTS<br/>• deduplicated market<br/>• salary_lookup()<br/>• cohort_sizes()"]
         UTILS["utils.py<br/>HELPERS<br/>• Formatting<br/>• Caching"]
     end
 
@@ -33,7 +34,9 @@ graph TB
     FEAT -->|prepare| SCHEMA
     SCHEMA -->|create tables| DB
     DB -->|query| DBMGR
-    DBMGR -->|get_hirer_view| HIRER
+    DBMGR -->|query| DL
+    DL -->|cohorts + benchmarks| HIRER
+    DBMGR -->|get_sector_list| HIRER
     DBMGR -->|get_seeker_view| SEEKER
     CONFIG -.->|configure| APP
     HIRER -->|render| APP
@@ -200,7 +203,7 @@ Team Member 1: Data Engineer
 
 Team Member 2: Analytics Engineer
     └─ Maintains database_manager.py
-       └─ Builds queries: get_hirer_view(), get_seeker_view()
+       └─ Builds queries: get_seeker_view(), get_hiring_trends()
           └─ Creates benchmarks & aggregations
 
 Team Member 3: Frontend Developer

@@ -14,41 +14,87 @@ ALL_SECTORS = "All sectors"
 ALL_LEVELS = "All levels"
 ALL_EXPERIENCE = "All experience levels"
 
+TABS_KEY = "hirer_tabs"
 
-def _config_panel() -> dict:
-    """The vacancy the hirer is about to post -- drives every tab.
+# Which controls each tab's figures actually read. A control absent here changes
+# nothing on that tab, so it is hidden rather than left sitting there inert --
+# five always-visible controls of which two do nothing reads as a broken chart.
+# Keep in step with SECTIONS; the assertion below the renderers enforces it.
+TAB_CONTROLS = {
+    "Salary benchmark":     ('sector', 'level', 'experience', 'years', 'salary'),
+    "Experience norms":     ('sector', 'level', 'years'),
+    "Applicant response":   ('sector', 'salary'),
+    "Reach vs conversion":  ('sector',),
+    "Repost risk":          ('sector', 'salary', 'years'),
+}
+
+
+def _config_panel(active: str) -> dict:
+    """The vacancy the hirer is about to post -- drives the open tab.
 
     Lives in the sidebar so it stays visible and keeps its values while the
     hirer moves between tabs. Controls are stacked rather than columned
     because the sidebar is too narrow for side-by-side labels.
+
+    Only the controls the open tab reads are rendered. A keyed widget's value is
+    dropped by default once it stops being rendered, which would reset the
+    vacancy on every tab switch, so each one asks for persist_state='session'
+    and keeps its value while hidden.
     """
+    shown = TAB_CONTROLS.get(active, TAB_CONTROLS["Salary benchmark"])
+    state = st.session_state
+
     with st.sidebar:
         st.subheader("The vacancy you're posting")
-        st.caption("These settings drive every tab.")
+        st.caption(f"The settings **{active}** reads. The rest are hidden here "
+                   "because they would not change this tab.")
 
-        sector = filter_selectbox("Sector", st.session_state.db.get_sector_list(),
-                                  ALL_SECTORS, key="hirer_sector")
-        level = filter_selectbox("Position level", hirer_data_loader.position_levels(),
-                                 ALL_LEVELS, key="hirer_level")
-        experience = filter_selectbox("Experience level",
-                                      hirer_data_loader.experience_levels(),
-                                      ALL_EXPERIENCE, key="hirer_experience")
-        salary = st.number_input(
-            "Planned salary (S$/month)", min_value=0, max_value=50000,
-            value=4000, step=250, key="hirer_salary",
-            help="The midpoint of the range you plan to advertise.",
-        )
-        years = st.number_input(
-            "Minimum years of experience", min_value=0, max_value=30,
-            value=3, step=1, key="hirer_years",
-        )
+        if 'sector' in shown:
+            filter_selectbox("Sector", st.session_state.db.get_sector_list(),
+                             ALL_SECTORS, key="hirer_sector",
+                             persist_state="session")
+        if 'level' in shown:
+            filter_selectbox("Position level", hirer_data_loader.position_levels(),
+                             ALL_LEVELS, key="hirer_level",
+                             persist_state="session")
+        if 'experience' in shown:
+            filter_selectbox("Experience level",
+                             hirer_data_loader.experience_levels(),
+                             ALL_EXPERIENCE, key="hirer_experience",
+                             persist_state="session")
+        if 'salary' in shown:
+            st.number_input(
+                "Planned salary (S$/month)", min_value=0, max_value=50000,
+                value=4000, step=250, key="hirer_salary",
+                persist_state="session",
+                help="The midpoint of the range you plan to advertise.",
+            )
+        if 'years' in shown:
+            st.number_input(
+                "Minimum years of experience", min_value=0, max_value=30,
+                value=3, step=1, key="hirer_years", persist_state="session",
+            )
+
+    # Read back from state, not from the widget return values: a hidden control
+    # returns nothing this run, but its persisted value still has to reach the
+    # tabs that do read it.
+    sector = _sentinel_to_none(state.get("hirer_sector"), ALL_SECTORS)
+    level = _sentinel_to_none(state.get("hirer_level"), ALL_LEVELS)
+    experience = _sentinel_to_none(state.get("hirer_experience"), ALL_EXPERIENCE)
+    salary = state.get("hirer_salary", 4000) or None
+    years = state.get("hirer_years", 3)
 
     return {
         'sector': sector, 'level': level, 'experience': experience,
-        'salary': salary or None, 'years': years,
-        'pay_band': hirer_data_loader.pay_band_for(salary or None),
+        'salary': salary, 'years': years,
+        'pay_band': hirer_data_loader.pay_band_for(salary),
         'yrs_bucket': hirer_data_loader.yrs_bucket_for(years),
     }
+
+
+def _sentinel_to_none(value, all_label: str):
+    """Session state holds the raw selectbox choice, including the "all" label."""
+    return None if value is None or value == all_label else value
 
 
 def _layer1_note() -> None:
@@ -59,12 +105,27 @@ def _layer1_note() -> None:
     )
 
 
-def _layer2_note() -> None:
-    """Scope note for engagement measures, which only a narrow cohort supports."""
+def _layer2_note(n: int, sector: str | None = None,
+                 cohort: str = "first-cycle 30-day postings") -> None:
+    """Scope note for engagement measures, which only a narrow cohort supports.
+
+    `n` is the row count behind the figure, and it always describes the sector
+    asked for: these charts never stand in the whole market for a sector, so the
+    note has only the one thing to say.
+    """
     st.caption(
-        f"{hirer_data_loader.cohort_sizes()['first_cycle']:,} first-cycle 30-day postings, "
-        "Mar–Jun 2023 — the only window with complete view and application counts. "
-        "All sectors; the sector filter does not apply here."
+        f"{n:,} {cohort}, Mar–Jun 2023 — the only window with complete view and "
+        f"application counts. {f'Filtered to **{sector}**.' if sector else 'All sectors.'}"
+    )
+
+
+def _too_thin(sector: str | None, what: str) -> None:
+    """Empty state for a sector the cohort cannot support at all."""
+    st.info(
+        f"No pay band in **{sector}** has {hirer_data_loader.MIN_N} or more "
+        f"postings in this cohort, so there is nothing to read {what} from. "
+        "The figures for other sectors are not a substitute — pick another "
+        "sector, or clear the filter to see the whole market."
     )
 
 
@@ -72,7 +133,8 @@ def _render_salary_benchmark(cfg: dict) -> None:
     """#1 -- layer 1 s.3, the core deliverable."""
     st.subheader("What comparable employers pay")
     _layer1_note()
-    bench = hirer_data_loader.salary_lookup(cfg['sector'], cfg['level'], cfg['experience'])
+    bench = hirer_data_loader.salary_lookup(cfg['sector'], cfg['level'],
+                                            cfg['experience'], cfg['yrs_bucket'])
 
     with charts.MPL_LOCK:
         st.write(charts.salary_range_bar(bench, cfg['salary']))
@@ -133,10 +195,11 @@ def _render_norms(cfg: dict) -> None:
 def _render_response(cfg: dict) -> None:
     """#6 -- layer 2 s.3."""
     st.subheader("Applicant response by pay band")
-    _layer2_note()
-    bands = hirer_data_loader.response_by_pay_band()
+    bands = hirer_data_loader.response_by_pay_band(cfg['sector'])
     if bands.empty:
+        _too_thin(cfg['sector'], "applicant response")
         return
+    _layer2_note(int(bands.n.sum()), cfg['sector'])
 
     with charts.MPL_LOCK:
         st.write(charts.response_chart(bands))
@@ -158,10 +221,11 @@ def _render_response(cfg: dict) -> None:
 def _render_funnel(cfg: dict) -> None:
     """#7 -- layer 2 s.4."""
     st.subheader("Reach or conversion — which is the problem?")
-    _layer2_note()
-    funnel = hirer_data_loader.funnel_by_pay_band()
+    funnel = hirer_data_loader.funnel_by_pay_band(cfg['sector'])
     if funnel.empty:
+        _too_thin(cfg['sector'], "reach and conversion")
         return
+    _layer2_note(int(funnel.n.sum()), cfg['sector'])
 
     with charts.MPL_LOCK:
         st.write(charts.funnel_scatter(funnel))
@@ -175,10 +239,14 @@ def _render_funnel(cfg: dict) -> None:
 def _render_repost_risk(cfg: dict) -> None:
     """#8 -- layer 2 s.5-6, the headline finding."""
     st.subheader("Repost risk: experience asked against pay offered")
-    _layer2_note()
-    rates = hirer_data_loader.repost_matrix()
-    if rates.empty:
+    rates = hirer_data_loader.repost_matrix(cfg['sector'])
+    if rates.notna().to_numpy().sum() == 0:
+        _too_thin(cfg['sector'], "repost risk")
         return
+    # Not the first-cycle pool the other two layer-2 tabs use: reposts are the
+    # measure here, so excluding them would remove the thing being counted.
+    _layer2_note(hirer_data_loader.layer2_size(cfg['sector']), cfg['sector'],
+                 cohort="30-day postings with complete counters")
 
     with charts.MPL_LOCK:
         st.write(charts.repost_heatmap(rates, highlight=(cfg['pay_band'], cfg['yrs_bucket'])))
@@ -190,16 +258,21 @@ def _render_repost_risk(cfg: dict) -> None:
         "in disguise. Your combination is outlined."
     )
 
-    contrast = hirer_data_loader.repost_contrast()
+    # Two groups rather than the grid's seven year-buckets, so a band can be
+    # readable here even where the heatmap cell above it is blank. A band this
+    # sector cannot support is simply absent, and the warning stays silent.
+    contrast = hirer_data_loader.repost_contrast(cfg['sector'])
     if cfg['pay_band'] in contrast.index and cfg['years'] >= 3:
         row = contrast.loc[cfg['pay_band']]
         if row.repost_gte3 > row.repost_lt3:
+            where = f"in **{cfg['sector']}**" if cfg['sector'] else "across all sectors"
             st.warning(
-                f"**Danger zone.** In the {cfg['pay_band']} band, postings asking "
-                f"3+ years were reposted {row.repost_gte3:.1f}% of the time against "
-                f"{row.repost_lt3:.1f}% for those asking less. Consider raising the "
-                "pay band or lowering the experience bar. This is a risk factor "
-                "across comparable postings, not a prediction about yours."
+                f"**Danger zone.** In the {cfg['pay_band']} band {where}, postings "
+                f"asking 3+ years were reposted {row.repost_gte3:.1f}% of the time "
+                f"against {row.repost_lt3:.1f}% for those asking less "
+                f"({int(row.n):,} postings). Consider raising the pay band or "
+                "lowering the experience bar. This is a risk factor across "
+                "comparable postings, not a prediction about yours."
             )
 
 
@@ -213,6 +286,13 @@ SECTIONS = (
     ("Repost risk", _render_repost_risk),
 )
 
+# A label that drifts out of TAB_CONTROLS would silently fall back to showing
+# the salary tab's controls, so fail at import instead.
+assert {label for label, _ in SECTIONS} == set(TAB_CONTROLS), (
+    "SECTIONS and TAB_CONTROLS disagree: "
+    f"{ {label for label, _ in SECTIONS} ^ set(TAB_CONTROLS) }"
+)
+
 
 def render_hirer_view():
     """Render hirer-focused dashboard.
@@ -220,12 +300,16 @@ def render_hirer_view():
     No board-level header: the view switch above already names it, and the
     heading cost enough vertical space to push the taller charts off-screen.
     """
-    cfg = _config_panel()
+    # The sidebar is built before the tabs exist, so the open tab comes from the
+    # tab widget's own state. on_change="rerun" means a tab switch reruns the
+    # script, so this is the tab about to render, not the one just left.
+    active = st.session_state.get(TABS_KEY, SECTIONS[0][0])
+    cfg = _config_panel(active)
 
     # on_change="rerun" makes tab bodies lazy: only the selected tab renders,
     # so switching sectors does not rebuild all five figures.
     tabs = st.tabs([label for label, _ in SECTIONS],
-                   on_change="rerun", key="hirer_tabs")
+                   on_change="rerun", key=TABS_KEY)
     for tab, (_, render) in zip(tabs, SECTIONS):
         with tab:
             # `open` is None when state tracking is unavailable; render then.

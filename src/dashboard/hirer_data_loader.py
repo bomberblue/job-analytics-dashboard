@@ -162,16 +162,20 @@ def _benchmark(frame: pd.DataFrame, keys: list) -> pd.DataFrame:
 
 
 GRAIN_NAMES = {'sector': 'sector', 'position_level': 'level',
-               'experience_level': 'experience'}
+               'experience_level': 'experience', 'yrs_bucket': 'years'}
 
 # The order in which dimensions are surrendered when a cell is too thin.
 # Experience goes first: position_level already encodes seniority, so it is the
-# most redundant of the three. Sector goes next. position_level is held longest
+# most redundant of the four -- doubly so now that yrs_bucket states the same
+# thing at a finer grain. Sector goes next. yrs_bucket is surrendered before
+# position_level, because carrying a fourth dimension leaves only 60% of cells
+# above MIN_N against 77% for three, so the years ask is the one that most often
+# has to be given up to quote a figure at all. position_level is held longest
 # because it separates pay far more sharply than industry does -- an
 # Executive-across-all-sectors benchmark still means something, whereas a
 # whole-sector one blends fresh grads with managers and quotes a spread too wide
 # to price against.
-DROP_ORDER = ['experience_level', 'sector', 'position_level']
+DROP_ORDER = ['experience_level', 'sector', 'yrs_bucket', 'position_level']
 
 
 @st.cache_data
@@ -191,7 +195,8 @@ def _salary_global() -> dict:
 
 
 def salary_lookup(sector: str | None = None, position_level: str | None = None,
-                  experience_level: str | None = None) -> dict:
+                  experience_level: str | None = None,
+                  yrs_bucket: str | None = None) -> dict:
     """Benchmark for one configuration, degrading gracefully when a cell is thin.
 
     Any dimension may be None, meaning "don't narrow on this" -- the benchmark
@@ -199,11 +204,13 @@ def salary_lookup(sector: str | None = None, position_level: str | None = None,
     value. Degradation surrenders one dimension at a time in DROP_ORDER, so
     every rung between the full combination and the whole market is tried
     before falling back to all postings. The grain is always reported so the
-    hirer can see how specific the comparison actually is.
+    hirer can see how specific the comparison actually is -- which matters more
+    with years in the ladder, since it is the dimension most often dropped.
     """
     specified = [(k, v) for k, v in (('sector', sector),
                                      ('position_level', position_level),
-                                     ('experience_level', experience_level))
+                                     ('experience_level', experience_level),
+                                     ('yrs_bucket', yrs_bucket))
                  if v is not None]
 
     ladder = []
@@ -251,83 +258,143 @@ def config_norms(sector: str | None = None) -> pd.DataFrame:
 
 # --- 6. response by pay band (layer 2 s.3) -----------------------------------
 
-def _first_cycle() -> pd.DataFrame:
+def _first_cycle(sector: str | None = None) -> pd.DataFrame:
     """Volume outcomes use first-cycle postings only -- layer 2 s.1.3."""
     cohort = _layer2_cohort()
-    return cohort[(cohort.repost_count == 0) & cohort.pay_band.notna()]
+    first = cohort[(cohort.repost_count == 0) & cohort.pay_band.notna()]
+    return first[first.sector == sector] if sector else first
 
 
-@st.cache_data
-def response_by_pay_band() -> pd.DataFrame:
-    """Median applications (P10-P90) and under-filled risk per pay band."""
-    first = _first_cycle()
-    under_filled = first.applications < first.vacancies
+# These functions never substitute the whole market for a sector that asked for
+# itself. A thin cell is dropped and shows as a gap, because a gap says "not
+# enough postings here" -- true, and visible -- whereas all-sector figures under
+# a sector heading say something false and say it silently. The caller renders
+# an empty result as a message rather than an empty chart.
 
-    out = first.groupby('pay_band', observed=True).agg(
+
+def _response_table(frame: pd.DataFrame) -> pd.DataFrame:
+    under_filled = frame.applications < frame.vacancies
+    out = frame.groupby('pay_band', observed=True).agg(
         n=('applications', 'size'),
         apps_p10=('applications', lambda s: s.quantile(.10)),
         apps_p50=('applications', 'median'),
         apps_p90=('applications', lambda s: s.quantile(.90)),
     )
-    out['under_filled'] = under_filled.groupby(first.pay_band, observed=True).mean()
+    out['under_filled'] = under_filled.groupby(frame.pay_band, observed=True).mean()
+    out = out[out.n >= MIN_N]
     return out.loc[[b for b in PAY_LABELS if b in out.index]]
+
+
+@st.cache_data
+def response_by_pay_band(sector: str | None = None) -> pd.DataFrame:
+    """Median applications (P10-P90) and under-filled risk per pay band.
+
+    Bands under MIN_N are dropped, so a sector shows only the bands it can
+    actually support -- possibly none.
+    """
+    return _response_table(_first_cycle(sector))
 
 
 # --- 7. reach vs conversion (layer 2 s.4) ------------------------------------
 
-@st.cache_data
-def funnel_by_pay_band() -> pd.DataFrame:
-    """Median views (reach) against median applications/views (conversion)."""
-    first = _first_cycle().copy()
-    first['conversion'] = first.applications / first.views.replace(0, np.nan)
+def _funnel_table(frame: pd.DataFrame) -> pd.DataFrame:
+    frame = frame.copy()
+    frame['conversion'] = frame.applications / frame.views.replace(0, np.nan)
 
-    out = first.groupby('pay_band', observed=True).agg(
+    out = frame.groupby('pay_band', observed=True).agg(
         n=('views', 'size'),
         views_p50=('views', 'median'),
         conversion_p50=('conversion', 'median'),
     )
     out['conversion_pct'] = out.conversion_p50 * 100
+    out = out[out.n >= MIN_N]
     return out.loc[[b for b in PAY_LABELS if b in out.index]]
+
+
+@st.cache_data
+def funnel_by_pay_band(sector: str | None = None) -> pd.DataFrame:
+    """Median views (reach) against median applications/views (conversion).
+
+    Same contract as response_by_pay_band(): the sector's own bands, or none.
+    """
+    return _funnel_table(_first_cycle(sector))
 
 
 # --- 8. repost risk (layer 2 s.5-6) ------------------------------------------
 
-@st.cache_data
-def repost_matrix() -> pd.DataFrame:
-    """Repost rate (%) by pay band x required years, cells under MIN_N blanked.
-
-    Must always be shown split by pay band: the unsplit view inverts the sign
-    (Simpson's paradox -- layer 2 notebook s.5).
-    """
-    pool = _layer2_cohort()
+def _repost_table(pool: pd.DataFrame) -> pd.DataFrame:
     rates = pd.crosstab(pool.pay_band, pool.yrs_bucket,
                         values=pool.is_repost, aggfunc='mean') * 100
     counts = pd.crosstab(pool.pay_band, pool.yrs_bucket)
     rates = rates.where(counts >= MIN_N)
     rates.index = rates.index.astype(str)
-    return rates.loc[[b for b in PAY_LABELS if b in rates.index]]
+    rates.columns = rates.columns.astype(str)
+    # Reindex to the full grid rather than take what crosstab returns: it drops
+    # year buckets that are empty across every band, which would quietly hand
+    # back a narrower chart for exactly the sectors whose gaps matter most. Every
+    # sector is drawn on the same 4 x 7 axes, so they can be read against each
+    # other and a hole is visible as a hole.
+    return rates.reindex(index=PAY_LABELS, columns=YR_LABELS)
 
 
 @st.cache_data
-def repost_contrast() -> pd.DataFrame:
-    """Repost rate below vs at-or-above 3 years required, within each pay band.
+def repost_matrix(sector: str | None = None) -> pd.DataFrame:
+    """Repost rate (%) by pay band x required years, cells under MIN_N blanked.
 
-    The >=3yr contrast layer 2 s.6 tests; supplies the numbers behind the
-    danger-zone warning.
+    Must always be shown split by pay band: the unsplit view inverts the sign
+    (Simpson's paradox -- layer 2 notebook s.5). All four bands and all seven
+    year buckets are kept as rows and columns even when a sector fills none of
+    them, so the grid keeps its shape and the gaps are legible as gaps -- a
+    sector whose postings cluster in one corner should look like one.
     """
     pool = _layer2_cohort()
+    return _repost_table(pool[pool.sector == sector] if sector else pool)
+
+
+@st.cache_data
+def layer2_size(sector: str | None = None) -> int:
+    """Row count behind the repost charts, for the caption that qualifies them."""
+    pool = _layer2_cohort()
+    return len(pool[pool.sector == sector] if sector else pool)
+
+
+def _contrast_table(pool: pd.DataFrame) -> pd.DataFrame:
     pool = pool[pool.pay_band.notna()]
     hi_exp = (pool.seniority_years.clip(0, 15) >= 3)
 
     out = (pool.groupby([pool.pay_band, hi_exp], observed=True)
                .is_repost.agg(['mean', 'size']).unstack() * 1)
+    # A thin sector can miss one side of the split entirely, and the columns are
+    # then absent rather than empty -- name them before reading them.
+    for stat in ('mean', 'size'):
+        for side in (False, True):
+            if (stat, side) not in out.columns:
+                out[(stat, side)] = np.nan
+
     res = pd.DataFrame({
         'repost_lt3': out[('mean', False)] * 100,
         'repost_gte3': out[('mean', True)] * 100,
-        'n': out[('size', False)] + out[('size', True)],
+        'n': out[('size', False)].fillna(0) + out[('size', True)].fillna(0),
     })
+    # Both sides must clear MIN_N: the row states a difference between them, so
+    # one thin side makes the comparison, not just one number, unreadable.
+    readable = ((out[('size', False)] >= MIN_N) & (out[('size', True)] >= MIN_N))
+    res = res[readable.fillna(False)]
     res.index = res.index.astype(str)
     return res.loc[[b for b in PAY_LABELS if b in res.index]]
+
+
+@st.cache_data
+def repost_contrast(sector: str | None = None) -> pd.DataFrame:
+    """Repost rate below vs at-or-above 3 years required, within each pay band.
+
+    The >=3yr contrast layer 2 s.6 tests; supplies the numbers behind the
+    danger-zone warning. A band missing from the result is a band this sector
+    cannot support, and the warning simply does not fire for it -- silence is
+    the honest output there, not the whole market's number in its place.
+    """
+    pool = _layer2_cohort()
+    return _contrast_table(pool[pool.sector == sector] if sector else pool)
 
 
 @st.cache_data
