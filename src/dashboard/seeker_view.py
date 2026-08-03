@@ -222,7 +222,11 @@ def render_seeker_view():
             )
             .sort_values('median_max', ascending=False)
         )
-        metrics['salary_benchmarks'][['median_entry', 'median_max', 'p90']] = metrics['salary_benchmarks'][['median_entry', 'median_max', 'p90']].applymap(format_currency_2dp)
+        # Some pandas builds may not expose DataFrame.applymap; use a
+        # column-wise mapping which is more portable across pandas versions.
+        for col in ['median_entry', 'median_max', 'p90']:
+            if col in metrics['salary_benchmarks'].columns:
+                metrics['salary_benchmarks'][col] = metrics['salary_benchmarks'][col].map(format_currency_2dp)
         valid_labels = (
             metrics['salary_benchmarks']
             .groupby('job_label')['count_samples']
