@@ -148,11 +148,10 @@ def initialize_database():
     conn.execute(RAW_JOBS_SCHEMA)
     conn.execute(RAW_JOBS_FLAT_SCHEMA)
     
-    # Create processed tables (denormalized for analytics).
-    # jobs is deliberately NOT dropped here. It is dropped and recreated in
-    # insert_jobs(), at the point where there is actual data to replace it with,
-    # so a failed extract or a --nrows test run can't wipe a good load.
+    # Recreate processed tables for a clean pipeline reload. Streamed chunks
+    # append to this new jobs table during the current run.
     print("📊 Creating processed/analytical tables...")
+    conn.execute("DROP TABLE IF EXISTS jobs")
     conn.execute(JOBS_SCHEMA)
     conn.execute(ROLE_STATISTICS_SCHEMA)
     conn.execute(SALARY_BENCHMARKS_SCHEMA)

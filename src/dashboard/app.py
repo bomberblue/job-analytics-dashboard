@@ -13,12 +13,14 @@ from src.database.database_manager import DatabaseManager
 from src.dashboard.hirer_view import render_hirer_view
 from src.dashboard.seeker_view import render_seeker_view
 from src.dashboard.market_overview import render_market_overview_view
+from src.dashboard.finance_view import render_finance_view
 
 # Each board is one entry: adding a new one only means adding a line here.
 VIEWS = {
+    "Market Overview": render_market_overview_view,
     "Hirer": render_hirer_view,
     "Seeker": render_seeker_view,
-    "Market Overview": render_market_overview_view,
+    "Finance Partner": render_finance_view,
 }
 
 
@@ -100,6 +102,7 @@ def main():
     This analytics dashboard provides insights into Singapore's job market. 
     - **Hirers** can identify market trends and top roles
     - **Job Seekers** can benchmark salaries, find opportunities, and understand market competitiveness
+    - **Finance Partners** can evaluate workforce-cost mix and vacancy budget risk
     """)
 
 

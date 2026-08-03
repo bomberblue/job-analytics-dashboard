@@ -62,7 +62,7 @@ class DatabaseManager:
             conn.close()
             return 0
     
-    def insert_jobs(self, df: pd.DataFrame) -> int:
+    def insert_jobs(self, df: pd.DataFrame, replace: bool = True) -> int:
         """
         Insert processed job data into the jobs table.
         
@@ -119,12 +119,11 @@ class DatabaseManager:
 
             df_to_insert = df_insert[available_cols].copy()
 
-            # Replace the table instead of appending. The pipeline always reloads
-            # from scratch, and appending made every re-run add a second copy of
-            # every posting. Done here rather than in initialize_database() so a
-            # failed extract can't leave an empty table behind.
-            conn.execute("DROP TABLE IF EXISTS jobs")
-            conn.execute(JOBS_SCHEMA)
+            # The first streamed chunk replaces the previous load. Later chunks
+            # append to the same table so the completed dataset is retained.
+            if replace:
+                conn.execute("DROP TABLE IF EXISTS jobs")
+                conn.execute(JOBS_SCHEMA)
 
             # Create column list for INSERT statement
             col_list = ', '.join(available_cols)
