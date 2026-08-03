@@ -143,6 +143,76 @@ def band_salary(max_sal):
         index=max_sal.index, dtype='object')
 
 
+SSOE_JOB_LABEL_PATTERNS = [
+    (r'\bdata engineer\b', 'Data Engineer'),
+    (r'\bdata analyst\b', 'Data Analyst'),
+    (r'\bdata scientist\b', 'Data Scientist'),
+    (r'\bsoftware engineer\b', 'Software Engineer'),
+    (r'\bsoftware developer\b', 'Software Developer'),
+    (r'\bproject manager\b', 'Project Manager'),
+    (r'\bsales executive\b', 'Sales Executive'),
+    (r'\baccounts executive\b', 'Accounts Executive'),
+    (r'\bquantity surveyor\b', 'Quantity Surveyor'),
+    (r'\b(retail|shop|store|floor) supervisor\b', 'Retail Supervisor'),
+    (r'\b(supervisor)\b.*\b(retail|shop|store|floor)\b', 'Retail Supervisor'),
+    (r'\b(restaurant|food and beverage|f&b|kitchen|cafe|bar|dining|hospitality) supervisor\b', 'F&B Supervisor'),
+    (r'\b(supervisor)\b.*\b(restaurant|food and beverage|f&b|kitchen|cafe|bar|dining|hospitality)\b', 'F&B Supervisor'),
+    (r'\b(construction|site|civil|building|contractor|foreman) supervisor\b', 'Construction Supervisor'),
+    (r'\b(supervisor)\b.*\b(construction|site|civil|building|contractor|foreman)\b', 'Construction Supervisor'),
+    (r'\b(officer|security|operations officer|shift officer) supervisor\b', 'Officer Supervisor'),
+    (r'\b(supervisor)\b.*\b(officer|security|operations officer|shift officer)\b', 'Officer Supervisor'),
+    (r'\bsupervisor\b', 'Supervisor'),
+    (r'\bchef\b', 'Chef'),
+    (r'\badmin(istrative)? assistant\b', 'Administrative Assistant'),
+    (r'\bmarketing executive\b', 'Marketing Executive'),
+    (r'\baccountant\b', 'Accountant'),
+    (r'\bbusiness analyst\b', 'Business Analyst'),
+]
+
+
+def derive_supervisor_label(lookup, company_hint):
+    """Derive a more specific supervisor label from title and company context."""
+    if re.search(r'\b(retail|shop|store|floor|boutique)\b', lookup) or 'retail' in company_hint:
+        return 'Retail Supervisor'
+    if re.search(r'\b(restaurant|food and beverage|f&b|kitchen|cafe|bar|dining|hospitality|hotel)\b', lookup) or 'restaurant' in company_hint or 'hotel' in company_hint:
+        return 'F&B Supervisor'
+    if re.search(r'\b(construction|site|civil|building|contractor|foreman|project site)\b', lookup) or 'construction' in company_hint:
+        return 'Construction Supervisor'
+    if re.search(r'\b(security|operations|shift|officer|police|station)\b', lookup) or 'security' in company_hint:
+        return 'Officer Supervisor'
+    return 'Supervisor'
+
+
+def derive_ssoc_job_label(title, position_level, company):
+    """Infer a standardized job label from title, position level, and company."""
+    title_text = str(title or '').strip()
+    lookup = title_text.lower()
+    company_text = str(company or '').strip()
+    company_hint = company_text.lower()
+
+    if 'supervisor' in lookup:
+        return derive_supervisor_label(lookup, company_hint)
+
+    for pattern, label in SSOE_JOB_LABEL_PATTERNS:
+        if re.search(pattern, lookup):
+            base_label = label
+            break
+    else:
+        base_label = title_text.title() if title_text else 'Unknown'
+
+    if 'retail' in company_hint and 'assistant' in lookup:
+        base_label = 'Retail Assistant'
+    elif 'bank' in company_hint and 'executive' in lookup:
+        base_label = 'Banking Executive'
+
+    normalized_position = str(position_level or '').strip()
+    if normalized_position in {'Entry', 'Mid', 'Senior'}:
+        if not re.search(r'\b(entry|mid|senior|lead|assistant|manager|executive|director|supervisor)\b', lookup):
+            base_label = f"{normalized_position} {base_label}"
+
+    return base_label
+
+
 def extract_skills_vectorised(text):
     """Extract skills from text using consistent boundary rule, one pass per skill in COMMON_SKILLS.
 
@@ -222,6 +292,11 @@ def feature_enrichment(df, job_category=None):
         (out['salary_midpoint'] / sal_p99 * 50).clip(upper=50).astype('Float64').fillna(25)
         + (out['skill_count'] / skill_max * 50)
     ).clip(0, 100).astype('Float64')
+
+    out['job_label'] = out.apply(
+        lambda row: derive_ssoc_job_label(row['title'], row['position_level'], row['company']),
+        axis=1
+    ).astype('category')
 
     return out
 

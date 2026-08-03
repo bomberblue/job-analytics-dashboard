@@ -5,8 +5,8 @@ Handles connections, queries, data insertion (raw and processed layers).
 import duckdb
 import pandas as pd
 import json
-from config.settings import DUCKDB_FILE
-from src.database.schema import JOBS_SCHEMA
+from config.settings import DUCKDB_FILE, RAW_CSV_PATH
+from src.database.schema import JOBS_SCHEMA, initialize_database
 
 
 class DatabaseManager:
@@ -16,8 +16,18 @@ class DatabaseManager:
         self.db_path = DUCKDB_FILE
     
     def get_connection(self):
-        """Get a DuckDB connection."""
-        return duckdb.connect(self.db_path)
+        """Get a DuckDB connection and initialize the database if needed."""
+        conn = duckdb.connect(self.db_path)
+        try:
+            conn.execute("SELECT 1 FROM jobs LIMIT 1").fetchall()
+        except Exception:
+            initialize_database()
+            if RAW_CSV_PATH.exists():
+                from src.pipeline.pipeline import DataPipeline
+                DataPipeline().run(csv_path=str(RAW_CSV_PATH))
+            else:
+                conn.execute(JOBS_SCHEMA)
+        return conn
     
     def insert_raw_jobs(self, df: pd.DataFrame) -> int:
         """
@@ -240,8 +250,24 @@ class DatabaseManager:
         Focused on: opportunities, benchmarks, market competition.
         """
         conn = self.get_connection()
-        
-        filters = "WHERE 1=1"
+
+        salary_filter = (
+            "salary_min IS NOT NULL AND salary_max IS NOT NULL "
+            "AND salary_min >= 500 AND salary_max <= 100000 "
+            "AND (seniority_years IS NULL OR seniority_years <= 30)"
+        )
+        try:
+            table_info = conn.execute("PRAGMA table_info('jobs')").fetchall()
+            if any(col[1] == 'salary_flag' for col in table_info):
+                salary_filter = (
+                    "salary_flag = 'ok' AND salary_min IS NOT NULL AND salary_max IS NOT NULL "
+                    "AND salary_min >= 500 AND salary_max <= 100000 "
+                    "AND (seniority_years IS NULL OR seniority_years <= 30)"
+                )
+        except Exception:
+            pass
+
+        filters = f"WHERE {salary_filter}"
         if experience_level:
             filters += f" AND experience_level = '{experience_level}'"
         if sector:
@@ -279,12 +305,12 @@ class DatabaseManager:
                     MIN(salary_min) as p25,
                     AVG(salary_min) as median_entry,
                     AVG(salary_max) as median_max,
-                    MAX(salary_max) as p90
+                    MAX(salary_max) as p90,
+                    COUNT(*) as count_samples
                 FROM jobs
                 {filters}
                 GROUP BY title, experience_level
                 ORDER BY median_max DESC
-                LIMIT 10
             """).df(),
             
             "competitive_skills": conn.execute(f"""

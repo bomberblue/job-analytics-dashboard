@@ -161,9 +161,10 @@ def _repair(s):
 
 def normalize_text(df):
     """Repair title and postedCompany_name in place: strip zero-width chars, collapse
-    whitespace. postedCompany_name is also upper-cased to merge its one casing outlier."""
+    whitespace. postedCompany_name is also upper-cased to merge its one casing outlier.
+    Titles are title-cased for consistent role labeling."""
     df = df.copy()
-    df['title'] = _repair(df['title'])
+    df['title'] = _repair(df['title']).str.title()
     df['postedCompany_name'] = _repair(df['postedCompany_name'].str.upper())
     print("  → Normalized title and postedCompany_name text")
     return df

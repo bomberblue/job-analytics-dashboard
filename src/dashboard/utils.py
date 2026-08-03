@@ -15,6 +15,13 @@ def format_currency(value):
     return f"${value:,.0f}"
 
 
+def format_currency_2dp(value):
+    """Format value as SGD currency with two decimal points."""
+    if pd.isna(value):
+        return "N/A"
+    return f"${value:,.2f}"
+
+
 @st.cache_data
 def format_percentage(value):
     """Format value as percentage."""
