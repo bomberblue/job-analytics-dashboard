@@ -1,23 +1,53 @@
 """
-Data access layer for the dashboard.
+Data access layer for the hirer view.
+
+The seeker and market-overview views read DatabaseManager directly; this module
+serves hirer_view.py alone, which is why the cohort definitions below can follow
+the hirer notebooks without having to suit every consumer.
 
 Chart code consumes the plain DataFrames returned here and never touches
-storage. `_load_jobs()` is the single seam where the backend is chosen --
-parquet today; a duckdb branch slots in beside it without touching any
-consumer.
+storage. `_load_jobs()` is the single seam where the backend is chosen -- the
+`jobs` table in DuckDB by default, with the enriched parquet kept as a fallback
+for anyone without a built database. Everything above that seam is backend-
+agnostic pandas, so the two sources cannot drift apart in what they report.
 
 Cohort definitions and constants mirror notebooks/hirer_layer1_analysis.ipynb
 and hirer_layer2_analysis.ipynb -- see those for the reasoning.
 """
 import os
-from pathlib import Path
 
+import duckdb
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-DATA_SOURCE = os.environ.get('JOBS_DATA_SOURCE', 'parquet')
-PARQUET_PATH = Path(__file__).resolve().parents[2] / 'data' / 'processed' / 'jobs_enriched.parquet'
+from config.settings import DATA_PROCESSED
+from src.database.database_manager import DatabaseManager
+
+DATA_SOURCE = os.environ.get('JOBS_DATA_SOURCE', 'duckdb')
+JOBS_TABLE = 'jobs'
+PARQUET_PATH = DATA_PROCESSED / 'jobs_enriched.parquet'
+
+# Holds a path, not a connection -- DatabaseManager opens and closes one per
+# query, so a module-level instance keeps no file lock between loads.
+_DB = DatabaseManager()
+
+# The slice of the enriched schema this module actually reads. Naming it keeps
+# the 1M-row frame down to the columns in use instead of all 33, and makes a
+# missing column fail loudly at load rather than as a KeyError mid-chart.
+MARKET_COLUMNS = [
+    'dup_group_id',
+    'sector', 'position_level', 'experience_level', 'seniority_years',
+    'salary_midpoint', 'salary_flag',
+    'expiry_date', 'listing_days',
+    'views', 'applications', 'vacancies',
+    'repost_count', 'is_repost',
+]
+
+# Low-cardinality text the parquet stores dictionary-encoded. DuckDB hands back
+# plain VARCHAR, so restore the category dtype on that path -- otherwise the
+# same frame costs several hundred MB more from one backend than the other.
+CATEGORICAL_COLUMNS = ['sector', 'position_level', 'experience_level', 'salary_flag']
 
 MIN_N = 30                  # smallest cell we will quote a figure from
 CRAWL_DATE = '2023-07-01'   # inferred counter-freeze boundary -- layer 1 notebook s.1
@@ -32,9 +62,36 @@ EXP_ORDER = ['Entry Level', 'Mid Level', 'Senior']
 
 
 def _load_jobs() -> pd.DataFrame:
-    """The backend seam. Add a duckdb branch here when that source lands."""
+    """The backend seam: MARKET_COLUMNS for every posting, in insertion order.
+
+    Deliberately does NOT deduplicate. `_market()` owns that, so one rule runs
+    over whichever backend loaded the rows. Both backends hand them back in the
+    order the cleaning notebook wrote them -- the parquet by file order, DuckDB
+    because `load_enriched` inserts that file and a plain scan preserves
+    insertion order -- which is what makes `keep='first'` downstream pick the
+    same posting either way.
+    """
+    if DATA_SOURCE == 'duckdb':
+        cols = ', '.join(MARKET_COLUMNS)
+        try:
+            mkt = _DB.query(f'SELECT {cols} FROM {JOBS_TABLE}', read_only=True)
+        except (duckdb.BinderException, duckdb.CatalogException, duckdb.IOException) as e:
+            # Two failures land here and neither explains itself. `jobs` also
+            # gets written by DataPipeline.insert_jobs(), which rebuilds it on
+            # the narrower JOBS_SCHEMA and drops every enrichment column below;
+            # and a pipeline mid-write holds the file lock, so the read cannot
+            # open it at all. Both are answered by the same two suggestions.
+            raise RuntimeError(
+                f'Cannot read `{JOBS_TABLE}` from {_DB.db_path}: {e}\n'
+                'Refresh it with `python -m src.pipeline.load_enriched` (or wait '
+                'for a running pipeline to finish), or set JOBS_DATA_SOURCE=parquet '
+                'to read the enriched parquet directly.'
+            ) from e
+        for col in CATEGORICAL_COLUMNS:
+            mkt[col] = mkt[col].astype('category')
+        return mkt
     if DATA_SOURCE == 'parquet':
-        return pd.read_parquet(PARQUET_PATH)
+        return pd.read_parquet(PARQUET_PATH, columns=MARKET_COLUMNS)
     raise ValueError(f'unknown JOBS_DATA_SOURCE: {DATA_SOURCE!r}')
 
 
@@ -60,10 +117,9 @@ def _layer2_cohort() -> pd.DataFrame:
 
 # --- configuration the hirer picks -------------------------------------------
 
-@st.cache_data
-def sector_list() -> list:
-    return sorted(_market().sector.dropna().unique().tolist())
-
+# The sector list is NOT here: DatabaseManager.get_sector_list() is the one
+# implementation, and both views call it. Deduplication does not change the set
+# of sectors, so there was never a reason for this module to derive its own.
 
 @st.cache_data
 def position_levels() -> list:

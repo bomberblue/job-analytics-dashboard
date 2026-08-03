@@ -2,11 +2,11 @@
 Hirer's dashboard view.
 
 Every section is backed by notebooks/hirer_layer1_analysis.ipynb or
-hirer_layer2_analysis.ipynb. Data comes from src/dashboard/data_loader.py, which
+hirer_layer2_analysis.ipynb. Data comes from src/dashboard/hirer_data_loader.py, which
 deduplicates the market the way those notebooks do.
 """
 import streamlit as st
-from src.dashboard import charts, data_loader
+from src.dashboard import charts, hirer_data_loader
 from src.dashboard.utils import filter_selectbox
 
 
@@ -26,12 +26,12 @@ def _config_panel() -> dict:
         st.subheader("The vacancy you're posting")
         st.caption("These settings drive every tab.")
 
-        sector = filter_selectbox("Sector", data_loader.sector_list(), ALL_SECTORS,
-                                  key="hirer_sector")
-        level = filter_selectbox("Position level", data_loader.position_levels(),
+        sector = filter_selectbox("Sector", st.session_state.db.get_sector_list(),
+                                  ALL_SECTORS, key="hirer_sector")
+        level = filter_selectbox("Position level", hirer_data_loader.position_levels(),
                                  ALL_LEVELS, key="hirer_level")
         experience = filter_selectbox("Experience level",
-                                      data_loader.experience_levels(),
+                                      hirer_data_loader.experience_levels(),
                                       ALL_EXPERIENCE, key="hirer_experience")
         salary = st.number_input(
             "Planned salary (S$/month)", min_value=0, max_value=50000,
@@ -46,15 +46,15 @@ def _config_panel() -> dict:
     return {
         'sector': sector, 'level': level, 'experience': experience,
         'salary': salary or None, 'years': years,
-        'pay_band': data_loader.pay_band_for(salary or None),
-        'yrs_bucket': data_loader.yrs_bucket_for(years),
+        'pay_band': hirer_data_loader.pay_band_for(salary or None),
+        'yrs_bucket': hirer_data_loader.yrs_bucket_for(years),
     }
 
 
 def _layer1_note() -> None:
     """Scope note for posting-time measures, valid across the whole market."""
     st.caption(
-        f"All {data_loader.cohort_sizes()['market']:,} postings "
+        f"All {hirer_data_loader.cohort_sizes()['market']:,} postings "
         "(duplicates removed), Mar 2023 – May 2024."
     )
 
@@ -62,7 +62,7 @@ def _layer1_note() -> None:
 def _layer2_note() -> None:
     """Scope note for engagement measures, which only a narrow cohort supports."""
     st.caption(
-        f"{data_loader.cohort_sizes()['first_cycle']:,} first-cycle 30-day postings, "
+        f"{hirer_data_loader.cohort_sizes()['first_cycle']:,} first-cycle 30-day postings, "
         "Mar–Jun 2023 — the only window with complete view and application counts. "
         "All sectors; the sector filter does not apply here."
     )
@@ -72,7 +72,7 @@ def _render_salary_benchmark(cfg: dict) -> None:
     """#1 -- layer 1 s.3, the core deliverable."""
     st.subheader("What comparable employers pay")
     _layer1_note()
-    bench = data_loader.salary_lookup(cfg['sector'], cfg['level'], cfg['experience'])
+    bench = hirer_data_loader.salary_lookup(cfg['sector'], cfg['level'], cfg['experience'])
 
     with charts.MPL_LOCK:
         st.write(charts.salary_range_bar(bench, cfg['salary']))
@@ -101,7 +101,7 @@ def _render_norms(cfg: dict) -> None:
     """#3 -- layer 1 s.4."""
     st.subheader("Experience asked, by position level")
     _layer1_note()
-    norms = data_loader.config_norms(cfg['sector'])
+    norms = hirer_data_loader.config_norms(cfg['sector'])
     if norms.empty:
         st.info("Not enough postings in this sector to read configuration norms.")
         return
@@ -134,7 +134,7 @@ def _render_response(cfg: dict) -> None:
     """#6 -- layer 2 s.3."""
     st.subheader("Applicant response by pay band")
     _layer2_note()
-    bands = data_loader.response_by_pay_band()
+    bands = hirer_data_loader.response_by_pay_band()
     if bands.empty:
         return
 
@@ -159,7 +159,7 @@ def _render_funnel(cfg: dict) -> None:
     """#7 -- layer 2 s.4."""
     st.subheader("Reach or conversion — which is the problem?")
     _layer2_note()
-    funnel = data_loader.funnel_by_pay_band()
+    funnel = hirer_data_loader.funnel_by_pay_band()
     if funnel.empty:
         return
 
@@ -176,20 +176,21 @@ def _render_repost_risk(cfg: dict) -> None:
     """#8 -- layer 2 s.5-6, the headline finding."""
     st.subheader("Repost risk: experience asked against pay offered")
     _layer2_note()
-    rates = data_loader.repost_matrix()
+    rates = hirer_data_loader.repost_matrix()
     if rates.empty:
         return
 
     with charts.MPL_LOCK:
         st.write(charts.repost_heatmap(rates, highlight=(cfg['pay_band'], cfg['yrs_bucket'])))
     st.caption(
-        f"Share of postings that were relisted (cells under {data_loader.MIN_N} postings "
-        "are blank). Shown split by pay band because the aggregate view reverses "
+        f"Share of postings that were relisted (cells under "
+        f"{hirer_data_loader.MIN_N} postings are blank). Shown split by pay band "
+        "because the aggregate view reverses "
         "the sign — the protective-looking effect of demanding experience is pay "
         "in disguise. Your combination is outlined."
     )
 
-    contrast = data_loader.repost_contrast()
+    contrast = hirer_data_loader.repost_contrast()
     if cfg['pay_band'] in contrast.index and cfg['years'] >= 3:
         row = contrast.loc[cfg['pay_band']]
         if row.repost_gte3 > row.repost_lt3:
