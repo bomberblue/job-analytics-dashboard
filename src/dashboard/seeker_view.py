@@ -3,7 +3,13 @@ Job seeker's dashboard view.
 """
 import pandas as pd
 import streamlit as st
-from src.dashboard.utils import format_currency, create_metric_columns
+from src.dashboard.utils import (
+    format_currency,
+    format_currency_2dp,
+    filter_selectbox,
+    create_metric_columns,
+)
+from src.pipeline.feature_enrichment import derive_ssoc_job_label
 
 
 def build_where_clause(sector=None, experience_level=None, seniority_years=None):
