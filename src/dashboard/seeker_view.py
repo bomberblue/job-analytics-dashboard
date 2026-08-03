@@ -3,7 +3,11 @@ Job seeker's dashboard view.
 """
 import pandas as pd
 import streamlit as st
-from src.dashboard.utils import format_currency, create_metric_columns
+from src.dashboard.utils import (
+    create_metric_columns,
+    filter_selectbox,
+    format_currency,
+)
 
 
 def build_where_clause(sector=None, experience_level=None, seniority_years=None):
@@ -120,15 +124,17 @@ def render_seeker_view():
     col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
     with col1:
-        industry_filter = st.selectbox(
+        industry = filter_selectbox(
             "Industry:",
-            ["All Industries"] + st.session_state.db.get_sector_list(),
+            st.session_state.db.get_sector_list(),
+            "All Industries",
             key="seeker_industry"
         )
     with col2:
-        exp_level = st.selectbox(
+        exp = filter_selectbox(
             "Your Experience Level:",
-            ["All Levels", "Entry Level", "Mid Level", "Senior"],
+            ["Entry Level", "Mid Level", "Senior"],
+            "All Levels",
             key="seeker_exp"
         )
     with col3:
@@ -140,10 +146,7 @@ def render_seeker_view():
             key="seeker_salary"
         )
     with col4:
-        st.write("")
-
-    industry = None if industry_filter == "All Industries" else industry_filter
-    exp = None if exp_level == "All Levels" else exp_level
+        st.write("")  # Spacing
 
     metrics = st.session_state.db.get_seeker_view(experience_level=exp, sector=industry)
     percentile_df = fetch_salary_percentile(st.session_state.db, industry=industry, experience_level=exp, salary=salary_input)

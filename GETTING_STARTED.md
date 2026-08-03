@@ -11,7 +11,7 @@ Your team project is now fully scaffolded and ready for development!
 
 ### 2. **Database Layer** (`src/database/`)
 - **schema.py** — DuckDB table definitions (jobs, salary_benchmarks, market_trends, skills_demand)
-- **database_manager.py** — Query builder with `.get_hirer_view()` and `.get_seeker_view()`
+- **database_manager.py** — Query builder with `.get_seeker_view()`, `.get_hiring_trends()`, `.get_sector_list()`
 
 ### 3. **Streamlit Dashboard** (`src/dashboard/`)
 - **app.py** — Main dashboard with role-based views (Hirer vs. Seeker)
@@ -43,7 +43,7 @@ Helps recruitment teams understand **market demand**:
 - **Skills in Demand:** What technical skills are most sought?
 - **Hiring Trends:** How is hiring volume changing over time?
 
-**Queries:** `db.get_hirer_view(sector=None)`
+**Queries:** `src/dashboard/hirer_data_loader.py` (deduplicated market cohorts), plus `db.get_sector_list()`
 
 ### Seeker View 🔍
 Helps job seekers understand **market opportunities**:
