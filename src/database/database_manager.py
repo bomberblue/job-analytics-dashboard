@@ -7,6 +7,7 @@ import pandas as pd
 import json
 from config.settings import DUCKDB_FILE, RAW_CSV_PATH
 from src.database.schema import JOBS_SCHEMA, initialize_database
+from src.pipeline.feature_enrichment import JOBS_SCHEMA_COLUMNS
 
 
 class DatabaseManager:
@@ -95,12 +96,12 @@ class DatabaseManager:
             if 'seniority_years' not in df_insert.columns:
                 df_insert['seniority_years'] = 0
             
-            # Define the columns needed for the jobs table
-            columns_order = ['job_id', 'title', 'company', 'sector', 'sub_sector', 'location',
-                           'salary_min', 'salary_max', 'salary_currency', 'experience_level',
-                           'seniority_years', 'position_level', 'job_type', 'posting_date',
-                           'expiry_date', 'views', 'applications', 'vacancies', 'repost_count',
-                           'skills', 'description', 'created_at']
+            # Everything feature_enrichment.py produces, plus the constant/back-filled
+            # fields it deliberately omits (see JOBS_SCHEMA_COLUMNS's docstring).
+            # Derived rather than hand-typed a second time -- a second list is how
+            # views/applications/job_type went missing before.
+            columns_order = JOBS_SCHEMA_COLUMNS + ['location', 'salary_currency',
+                                                     'description', 'created_at']
 
             # Filter to available columns only
             available_cols = [col for col in columns_order if col in df_insert.columns]

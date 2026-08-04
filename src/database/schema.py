@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     skills TEXT,  -- comma-separated skills
     description TEXT,
     requirements TEXT,
+    dup_group_id INTEGER,   -- same-day duplicate group; see data_cleaning.py
+    salary_midpoint FLOAT,
+    salary_flag VARCHAR,    -- 'ok', 'low_stipend', 'outlier', 'undisclosed'
+    listing_days SMALLINT,  -- expiry_date - posting_date
+    is_repost BOOLEAN,
     created_at TIMESTAMP DEFAULT current_timestamp
 )
 """
