@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import streamlit as st
 import pandas as pd
 import altair as alt
-from config.settings import STREAMLIT_CONFIG
+from config.settings import STREAMLIT_CONFIG, ENGAGEMENT_COUNTER_FREEZE_DATE
 from src.database.database_manager import DatabaseManager
 from src.dashboard.utils import (
     create_metric_columns,
@@ -19,6 +19,8 @@ from src.dashboard.utils import (
     format_percentage,
     create_comparison_table,
 )
+from src.dashboard.finance_view import _table_exists
+from src.dashboard.theme import VOLUME_COLOR, PAY_COLOR
 
 
 def _labeled_table(df, rename_map):
@@ -232,7 +234,7 @@ def render_salary_trend(db, sector=None, position_level=None):
     # Deliberately a one-off: the bar charts elsewhere in this file are correctly
     # zero-based (they encode magnitude), so this isn't the start of a wider Altair
     # migration - just the one line chart with a range too narrow for a zero axis.
-    chart = alt.Chart(df).mark_line(point=True).encode(
+    chart = alt.Chart(df).mark_line(point=True, color=PAY_COLOR).encode(
         x=alt.X('month:O', title=None),
         y=alt.Y('median_pay:Q', title='Median Pay ($)', scale=alt.Scale(zero=False)),
     )
@@ -269,7 +271,7 @@ def render_category_rankings(db, sector=None, position_level=None):
             industries['sector'] = pd.Categorical(
                 industries['sector'], categories=industries['sector'], ordered=True
             )
-            st.bar_chart(industries.set_index('sector')['postings'], use_container_width=True)
+            st.bar_chart(industries.set_index('sector')['postings'], color=VOLUME_COLOR, use_container_width=True)
     with col2:
         st.caption("By position level")
         if levels.empty:
@@ -278,7 +280,7 @@ def render_category_rankings(db, sector=None, position_level=None):
             levels['position_level'] = pd.Categorical(
                 levels['position_level'], categories=levels['position_level'], ordered=True
             )
-            st.bar_chart(levels.set_index('position_level')['postings'], use_container_width=True)
+            st.bar_chart(levels.set_index('position_level')['postings'], color=VOLUME_COLOR, use_container_width=True)
 
 
 def fetch_employment_type_mix(db, sector=None, position_level=None):
@@ -313,10 +315,10 @@ def render_employment_type_mix(db, sector=None, position_level=None):
     col1, col2 = st.columns(2)
     with col1:
         st.caption("By postings")
-        st.bar_chart(df.set_index('job_type')['postings'], use_container_width=True)
+        st.bar_chart(df.set_index('job_type')['postings'], color=VOLUME_COLOR, use_container_width=True)
     with col2:
         st.caption("By median pay")
-        st.bar_chart(df.set_index('job_type')['median_pay'], use_container_width=True)
+        st.bar_chart(df.set_index('job_type')['median_pay'], color=PAY_COLOR, use_container_width=True)
 
 
 _MONTH_NAMES = [
@@ -371,7 +373,7 @@ def render_seasonality(db, sector=None, position_level=None):
     if df.empty:
         st.info("No postings match the current filters.")
         return
-    st.bar_chart(df.set_index('month_name')['avg_postings'], use_container_width=True)
+    st.bar_chart(df.set_index('month_name')['avg_postings'], color=VOLUME_COLOR, use_container_width=True)
     st.caption("Years and total postings behind each bar (a thin sample, like a month covered by only one partial year, will read as unreliable):")
     _labeled_table(df, {
         'month_name': 'Month',
@@ -667,11 +669,217 @@ def render_wage_decomposition(db, sector=None, position_level=None):
     })
 
 
+# Same counter-freeze boundary as hirer_data_loader.py's CRAWL_DATE (see
+# config/settings.py for the underlying data artifact). Any leverage/competition
+# measure below excludes postings after it; pay itself is unaffected and uses
+# the full period.
+ENGAGEMENT_DATA_END_DATE = ENGAGEMENT_COUNTER_FREEZE_DATE
+
+# Minimum postings an industry needs (in the engagement window, or with a
+# disclosed salary) before its leverage or pay figure is trusted.
+MIN_LEVERAGE_SAMPLE = 2000
+
+# Minimum Contract and Permanent postings an industry needs in finance_job_features
+# before its cost premium is trusted - matches finance_view's own threshold.
+MIN_CONTRACT_COHORT_SAMPLE = 30
+
+# Below this many industries, a correlation coefficient is noise, not a finding.
+MIN_SECTORS_FOR_CORRELATION = 5
+
+
+def _position_level_filter(position_level):
+    """SQL fragment narrowing to one position level, or "" for no filter."""
+    return f"AND position_level = '{position_level}'" if position_level else ""
+
+
+def fetch_leverage_vs_pay(db, position_level=None, min_n=MIN_LEVERAGE_SAMPLE):
+    """
+    Return, per industry, how much competitive pressure candidates face
+    (applicants per opening, view-to-apply conversion) against median pay -
+    the leverage-vs-pay side of "does the market pay more where it's harder
+    to hire?"
+
+    Deliberately two independent WHERE clauses rather than one shared filter:
+    leverage needs the pre-ENGAGEMENT_DATA_END_DATE window (see that constant),
+    pay does not and uses the full period, so restricting pay to the same
+    window would throw away good salary data for no reason.
+    """
+    position_filter = _position_level_filter(position_level)
+    sql = f"""
+        WITH leverage AS (
+            SELECT sector,
+                SUM(applications) * 1.0 / NULLIF(SUM(vacancies), 0) AS applicants_per_opening,
+                SUM(applications) * 100.0 / NULLIF(SUM(views), 0) AS apply_rate_pct
+            FROM jobs
+            WHERE posting_date < '{ENGAGEMENT_DATA_END_DATE}' AND sector IS NOT NULL
+            {position_filter}
+            GROUP BY sector
+            HAVING COUNT(*) >= {int(min_n)}
+        ),
+        pay AS (
+            SELECT sector, MEDIAN(salary_midpoint) AS median_pay
+            FROM jobs
+            WHERE salary_flag = 'ok' AND sector IS NOT NULL
+            {position_filter}
+            GROUP BY sector
+            HAVING COUNT(*) >= {int(min_n)}
+        )
+        SELECT leverage.sector, applicants_per_opening, apply_rate_pct, median_pay
+        FROM leverage JOIN pay ON pay.sector = leverage.sector
+    """
+    return db.query(sql)
+
+
+def fetch_contract_premium(db, position_level=None, min_cohort=MIN_CONTRACT_COHORT_SAMPLE):
+    """
+    Return, per industry, the median contract-vs-permanent cost premium: how
+    much more (or less) a contract posting's estimated monthly cost is versus
+    a permanent one, matching finance_view's own cohort definition and sample
+    threshold. Empty if the finance pipeline hasn't been run yet.
+
+    Deliberately a coarser (sector-only) re-derivation of finance_view.py's
+    _conversion_base_sql, not a call into it: this section needs one number per
+    sector to correlate against leverage, not finance_view's full
+    sector/sub_sector/position_level breakdown. If the cohort definition or
+    MIN_CONTRACT_COHORT_SAMPLE threshold changes there, mirror it here too.
+    """
+    if not _table_exists(db, 'finance_job_features'):
+        return pd.DataFrame()
+    position_filter = _position_level_filter(position_level)
+    sql = f"""
+        WITH cohort AS (
+            SELECT sector, employment_cohort,
+                MEDIAN(loaded_monthly_cost_per_head) AS median_cost,
+                COUNT(*) AS n
+            FROM finance_job_features
+            WHERE employment_cohort IN ('Contract', 'Permanent') AND sector IS NOT NULL
+            {position_filter}
+            GROUP BY sector, employment_cohort
+        ),
+        pivoted AS (
+            SELECT sector,
+                MAX(CASE WHEN employment_cohort = 'Contract' THEN median_cost END) AS contract_cost,
+                MAX(CASE WHEN employment_cohort = 'Contract' THEN n END) AS n_contract,
+                MAX(CASE WHEN employment_cohort = 'Permanent' THEN median_cost END) AS permanent_cost,
+                MAX(CASE WHEN employment_cohort = 'Permanent' THEN n END) AS n_permanent
+            FROM cohort
+            GROUP BY sector
+        )
+        SELECT sector,
+            (contract_cost - permanent_cost) * 100.0 / NULLIF(permanent_cost, 0) AS contract_premium_pct
+        FROM pivoted
+        WHERE n_contract >= {int(min_cohort)} AND n_permanent >= {int(min_cohort)}
+    """
+    return db.query(sql)
+
+
+def _scatter_with_extreme_labels(df, x_col, y_col, x_title, y_title, tooltip_fmt, n_labeled=2):
+    """
+    A single-color scatter (one dot per industry) with sparse text labels on
+    only the highest- and lowest-x points - labeling all ~20 industries would
+    be unreadable, so the rest are left to the tooltip.
+    """
+    base = alt.Chart(df).mark_circle(size=160, opacity=0.85, color=VOLUME_COLOR).encode(
+        x=alt.X(f'{x_col}:Q', title=x_title),
+        y=alt.Y(f'{y_col}:Q', title=y_title, scale=alt.Scale(zero=False)),
+        tooltip=[
+            alt.Tooltip('sector:N', title='Industry'),
+            alt.Tooltip(f'{x_col}:Q', title=x_title, format='.2f'),
+            alt.Tooltip(f'{y_col}:Q', title=y_title, format=tooltip_fmt),
+        ],
+    ).properties(height=320)
+
+    extremes = pd.concat([df.nlargest(n_labeled, x_col), df.nsmallest(n_labeled, x_col)]).drop_duplicates(subset='sector')
+    labels = alt.Chart(extremes).mark_text(align='left', dx=8, dy=-6, fontSize=10, color='#52514e').encode(
+        x=f'{x_col}:Q', y=f'{y_col}:Q', text='sector:N',
+    )
+    return base + labels
+
+
+def render_cross_view_insight(db, sector=None, position_level=None):
+    """
+    The capstone: does pay actually respond to how hard a role is to fill, and
+    does the standard cost-saving lever (converting permanent roles to
+    contract) target the industries that actually need that flexibility?
+
+    Compares across all industries at once, so - like fetch_sector_mix_shift -
+    this only renders for "All Sectors"; position_level may still narrow it.
+    """
+    st.markdown("#### Does Pay Track Scarcity?")
+    st.caption(
+        "Leverage - applicants per opening - against pay, by industry: does the "
+        "market actually pay more where a role is harder to fill?"
+    )
+    if sector is not None:
+        st.info('This section compares across all industries at once, so it is shown only for "All Sectors".')
+        return
+
+    leverage_df = fetch_leverage_vs_pay(db, position_level=position_level)
+    if len(leverage_df) < MIN_SECTORS_FOR_CORRELATION:
+        st.info(
+            f"Not enough industries with sufficient sample size ({MIN_LEVERAGE_SAMPLE:,}+ "
+            "postings, before the engagement-data cutoff) to test this under the current filter."
+        )
+        return
+
+    leverage_pay_corr = leverage_df['applicants_per_opening'].corr(leverage_df['median_pay'])
+
+    premium_df = fetch_contract_premium(db, position_level=position_level)
+    combined = (
+        premium_df.merge(leverage_df[['sector', 'applicants_per_opening']], on='sector')
+        if not premium_df.empty else pd.DataFrame()
+    )
+    premium_corr = (
+        combined['applicants_per_opening'].corr(combined['contract_premium_pct'])
+        if len(combined) >= MIN_SECTORS_FOR_CORRELATION else None
+    )
+
+    stats = {"Correlation: Leverage vs. Pay": f"{leverage_pay_corr:+.2f}"}
+    if premium_corr is not None:
+        stats["Correlation: Leverage vs. Contract Premium"] = f"{premium_corr:+.2f}"
+    create_metric_columns(stats)
+    st.caption(
+        "Correlation coefficients, -1 to +1. Leverage vs. Pay near zero means pay "
+        "does not track how competitive an industry is to hire in. A negative "
+        "Leverage vs. Contract Premium means converting to contract saves the "
+        "least money exactly where competition for talent is fiercest - the "
+        "opposite of where that flexibility is actually needed."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.caption(f"Applicants per Opening vs. Median Pay ({len(leverage_df)} industries)")
+        st.altair_chart(
+            _scatter_with_extreme_labels(
+                leverage_df, 'applicants_per_opening', 'median_pay',
+                'Applicants per Opening', 'Median Pay ($)', ',.0f'
+            ),
+            use_container_width=True
+        )
+    with col2:
+        st.caption(f"Applicants per Opening vs. Contract Premium ({len(combined)} industries)")
+        if combined.empty:
+            st.info(
+                "Requires the finance pipeline's tables, which aren't materialized in "
+                "this database yet."
+            )
+        else:
+            st.altair_chart(
+                _scatter_with_extreme_labels(
+                    combined, 'applicants_per_opening', 'contract_premium_pct',
+                    'Applicants per Opening', 'Contract Premium (%)', '+.1f'
+                ),
+                use_container_width=True
+            )
+
+
 def render_market_overview_view():
     """
-    Render the board's own header, filters, and all eight sections. Composable
-    entry point for a shell that already has session state set up (e.g.
-    app.py) — matches render_hirer_view()/render_seeker_view()'s
+    Render the board's own header, filters, and nine sections grouped into four
+    bordered panels, in narrative order: what's happening and why, what the
+    market looks like, who's actually posting, and what it all means together.
+    Composable entry point for a shell that already has session state set up
+    (e.g. app.py) — matches render_hirer_view()/render_seeker_view()'s
     zero-argument calling convention and self-contained header style.
     """
     st.header("📊 Market Overview")
@@ -680,21 +888,31 @@ def render_market_overview_view():
     sector, position_level = render_filters(db)
     st.divider()
 
-    render_headline(db, sector, position_level)
-    st.divider()
-    render_industry_momentum(db, sector, position_level)
-    st.divider()
-    render_salary_trend(db, sector, position_level)
-    st.divider()
-    render_wage_decomposition(db, sector, position_level)
-    st.divider()
-    render_category_rankings(db, sector, position_level)
-    st.divider()
-    render_employment_type_mix(db, sector, position_level)
-    st.divider()
-    render_seasonality(db, sector, position_level)
-    st.divider()
-    render_market_concentration(db, sector, position_level)
+    with st.container(border=True):
+        st.markdown("### 📈 Market Pulse")
+        render_headline(db, sector, position_level)
+        st.divider()
+        render_industry_momentum(db, sector, position_level)
+        st.divider()
+        render_salary_trend(db, sector, position_level)
+        st.divider()
+        render_wage_decomposition(db, sector, position_level)
+
+    with st.container(border=True):
+        st.markdown("### 🏭 Market Composition")
+        render_category_rankings(db, sector, position_level)
+        st.divider()
+        render_employment_type_mix(db, sector, position_level)
+        st.divider()
+        render_seasonality(db, sector, position_level)
+
+    with st.container(border=True):
+        st.markdown("### 🏢 Market Structure")
+        render_market_concentration(db, sector, position_level)
+
+    with st.container(border=True):
+        st.markdown("### 🔍 Cross-View Insight")
+        render_cross_view_insight(db, sector, position_level)
 
 
 def main():

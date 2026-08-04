@@ -4,6 +4,7 @@ import altair as alt
 import streamlit as st
 
 from src.dashboard.utils import create_metric_columns, format_currency, format_percentage
+from src.dashboard.theme import PAY_COLOR
 
 
 REQUIRED_FINANCE_TABLES = [
@@ -127,6 +128,10 @@ def _fetch_headline_metrics(db, year: int, sector: str, sub_sector: str | None, 
     )
 
 
+# market_overview.py's fetch_contract_premium re-derives this same Contract-vs-
+# Permanent cohort comparison at coarser (sector-only) grain for its cross-view
+# correlation; mirror any change to the cohort definition or sample threshold
+# there too.
 def _conversion_base_sql(where: str) -> str:
     return f"""
         WITH filtered AS (
@@ -492,7 +497,7 @@ def render_finance_view():
         chart_data = top_positions[["position_level", "total_vacancy_budget_exposure"]].copy()
         chart = (
             alt.Chart(chart_data)
-            .mark_bar(color="#7ec3ff")
+            .mark_bar(color=PAY_COLOR)
             .encode(
                 x=alt.X(
                     "position_level:N",
