@@ -13,11 +13,13 @@ import seaborn as sns
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
+from src.dashboard.theme import VOLUME_COLOR
+
 # Matplotlib is not thread-safe; hold this around figure creation AND rendering
 # (st.write draws the figure) when multiple users may hit the app concurrently.
 MPL_LOCK = RLock()
 
-BLUE = '#2a78d6'
+BLUE = VOLUME_COLOR   # same blue as the rest of the dashboard, single source of truth
 RED = '#e34948'
 INK = '#0b0b0b'
 INK_MUTED = '#52514e'

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import streamlit as st
 import pandas as pd
 import altair as alt
-from config.settings import STREAMLIT_CONFIG
+from config.settings import STREAMLIT_CONFIG, ENGAGEMENT_COUNTER_FREEZE_DATE
 from src.database.database_manager import DatabaseManager
 from src.dashboard.utils import (
     create_metric_columns,
@@ -19,12 +19,8 @@ from src.dashboard.utils import (
     format_percentage,
     create_comparison_table,
 )
-
-# One color per metric kind, used on every chart in this file so the board
-# reads as one system rather than each chart picking its own default: blue for
-# postings/activity (a count), orange for anything denominated in dollars.
-VOLUME_COLOR = '#2a78d6'
-PAY_COLOR = '#eb6834'
+from src.dashboard.finance_view import _table_exists
+from src.dashboard.theme import VOLUME_COLOR, PAY_COLOR
 
 
 def _labeled_table(df, rename_map):
@@ -673,12 +669,11 @@ def render_wage_decomposition(db, sector=None, position_level=None):
     })
 
 
-# Views/applications counters are only reliable before this date - a platform-
-# side counter freeze drops average views per posting by roughly 20x almost
-# overnight at this boundary (confirmed against this dataset: ~70 avg views per
-# posting in June 2023 vs ~5 in July). Any leverage/competition measure below
-# excludes postings after it; pay itself is unaffected and uses the full period.
-ENGAGEMENT_DATA_END_DATE = '2023-07-01'
+# Same counter-freeze boundary as hirer_data_loader.py's CRAWL_DATE (see
+# config/settings.py for the underlying data artifact). Any leverage/competition
+# measure below excludes postings after it; pay itself is unaffected and uses
+# the full period.
+ENGAGEMENT_DATA_END_DATE = ENGAGEMENT_COUNTER_FREEZE_DATE
 
 # Minimum postings an industry needs (in the engagement window, or with a
 # disclosed salary) before its leverage or pay figure is trusted.
@@ -690,6 +685,11 @@ MIN_CONTRACT_COHORT_SAMPLE = 30
 
 # Below this many industries, a correlation coefficient is noise, not a finding.
 MIN_SECTORS_FOR_CORRELATION = 5
+
+
+def _position_level_filter(position_level):
+    """SQL fragment narrowing to one position level, or "" for no filter."""
+    return f"AND position_level = '{position_level}'" if position_level else ""
 
 
 def fetch_leverage_vs_pay(db, position_level=None, min_n=MIN_LEVERAGE_SAMPLE):
@@ -704,7 +704,7 @@ def fetch_leverage_vs_pay(db, position_level=None, min_n=MIN_LEVERAGE_SAMPLE):
     pay does not and uses the full period, so restricting pay to the same
     window would throw away good salary data for no reason.
     """
-    position_filter = f"AND position_level = '{position_level}'" if position_level else ""
+    position_filter = _position_level_filter(position_level)
     sql = f"""
         WITH leverage AS (
             SELECT sector,
@@ -730,27 +730,22 @@ def fetch_leverage_vs_pay(db, position_level=None, min_n=MIN_LEVERAGE_SAMPLE):
     return db.query(sql)
 
 
-def _finance_features_available(db):
-    """Whether finance_job_features exists. The finance pipeline is a separate,
-    optional step, so this section degrades to an explanatory message instead
-    of erroring when it hasn't been run - matches finance_view's own guard."""
-    result = db.query(
-        "SELECT COUNT(*) AS n FROM information_schema.tables "
-        "WHERE table_name = 'finance_job_features'"
-    )
-    return int(result.iloc[0]['n']) > 0
-
-
 def fetch_contract_premium(db, position_level=None, min_cohort=MIN_CONTRACT_COHORT_SAMPLE):
     """
     Return, per industry, the median contract-vs-permanent cost premium: how
     much more (or less) a contract posting's estimated monthly cost is versus
     a permanent one, matching finance_view's own cohort definition and sample
     threshold. Empty if the finance pipeline hasn't been run yet.
+
+    Deliberately a coarser (sector-only) re-derivation of finance_view.py's
+    _conversion_base_sql, not a call into it: this section needs one number per
+    sector to correlate against leverage, not finance_view's full
+    sector/sub_sector/position_level breakdown. If the cohort definition or
+    MIN_CONTRACT_COHORT_SAMPLE threshold changes there, mirror it here too.
     """
-    if not _finance_features_available(db):
+    if not _table_exists(db, 'finance_job_features'):
         return pd.DataFrame()
-    position_filter = f"AND position_level = '{position_level}'" if position_level else ""
+    position_filter = _position_level_filter(position_level)
     sql = f"""
         WITH cohort AS (
             SELECT sector, employment_cohort,

@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from config.settings import DATA_PROCESSED
+from config.settings import DATA_PROCESSED, ENGAGEMENT_COUNTER_FREEZE_DATE
 from src.database.database_manager import DatabaseManager
 
 DATA_SOURCE = os.environ.get('JOBS_DATA_SOURCE', 'duckdb')
@@ -50,7 +50,7 @@ MARKET_COLUMNS = [
 CATEGORICAL_COLUMNS = ['sector', 'position_level', 'experience_level', 'salary_flag']
 
 MIN_N = 30                  # smallest cell we will quote a figure from
-CRAWL_DATE = '2023-07-01'   # inferred counter-freeze boundary -- layer 1 notebook s.1
+CRAWL_DATE = ENGAGEMENT_COUNTER_FREEZE_DATE  # inferred counter-freeze boundary -- layer 1 notebook s.1
 
 YR_BINS = [-1, 0, 1, 2, 3, 5, 8, 100]
 YR_LABELS = ['0', '1', '2', '3', '4-5', '6-8', '9+']

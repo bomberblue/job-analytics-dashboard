@@ -10,6 +10,7 @@ from src.dashboard.utils import (
     create_metric_columns,
 )
 from src.pipeline.feature_enrichment import derive_ssoc_job_label
+from src.dashboard.theme import PAY_COLOR
 
 
 def build_where_clause(sector=None, experience_level=None, seniority_years=None):
@@ -266,6 +267,7 @@ def render_seeker_view():
     if not experience_years_df.empty:
         st.line_chart(
             experience_years_df.set_index('seniority_years')['median_salary'],
+            color=PAY_COLOR,
             use_container_width=True
         )
 
@@ -274,6 +276,7 @@ def render_seeker_view():
         ladder_df['position_level'] = make_unique_categorical(ladder_df['position_level'])
         st.bar_chart(
             ladder_df.set_index('position_level')['median_salary'],
+            color=PAY_COLOR,
             use_container_width=True
         )
 
@@ -284,6 +287,7 @@ def render_seeker_view():
         chart_df['pay_range'] = pd.to_numeric(chart_df['pay_range'], errors='coerce')
         st.bar_chart(
             chart_df.set_index('industry_level')['pay_range'],
+            color=PAY_COLOR,
             use_container_width=True
         )
 
@@ -338,5 +342,6 @@ def render_seeker_view():
         skills_chart = metrics['competitive_skills'].head(10)
         st.bar_chart(
             skills_chart.set_index('skill')['avg_salary'],
+            color=PAY_COLOR,
             use_container_width=True
         )
