@@ -154,9 +154,8 @@ def make_unique_categorical(values, ordered=True):
 
 
 def render_seeker_view():
-    """Render job seeker-focused dashboard with fairness and opportunity insights."""
-    st.header("🔍 Job Seeker's Dashboard")
-
+    """Render job seeker-focused dashboard with fairness and opportunity insights.
+    No header - the nav chip above already names the board."""
     col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
     with col1:

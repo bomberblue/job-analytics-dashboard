@@ -875,16 +875,17 @@ def render_cross_view_insight(db, sector=None, position_level=None):
 
 def render_market_overview_view():
     """
-    Render the board's own header, filters, and nine sections grouped into four
-    bordered panels, in narrative order: what's happening and why, what the
-    market looks like, who's actually posting, and what it all means together.
-    Composable entry point for a shell that already has session state set up
-    (e.g. app.py) — matches render_hirer_view()/render_seeker_view()'s
-    zero-argument calling convention and self-contained header style.
+    Render the board's own caption, filters, and nine sections grouped into
+    four bordered panels, in narrative order: what's happening and why, what
+    the market looks like, who's actually posting, and what it all means
+    together. No header - the nav chip above already names the board (see
+    app.py's render_nav()). Composable entry point for a shell that already
+    has session state set up (e.g. app.py) — matches
+    render_hirer_view()/render_seeker_view()'s zero-argument calling
+    convention.
     """
-    st.header("📊 Market Overview")
-    st.caption("What's happening in the Singapore job market")
     db = st.session_state.db
+    st.caption("Pay trends, market composition, and structure in Singapore's job postings.")
     sector, position_level = render_filters(db)
     st.divider()
 
