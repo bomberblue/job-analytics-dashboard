@@ -27,7 +27,19 @@ GRID = '#e8e8e6'
 TRACK = '#ececeb'
 
 
-MAX_FIG_HEIGHT = 5.0   # inches; ~550px, so a chart still fits a laptop viewport
+# st.write renders these through st.pyplot(width='stretch'), which scales the
+# image to the container width. The figsize and dpi therefore never reach the
+# browser -- only the ratio between them does, so on-screen height works out to
+# (height / width) * container width. Sizing in inches cannot bound that; the
+# ratio is the only lever, which is why the cap below is expressed as one.
+#
+# The container is 1400px (app.py), and the page chrome above a chart -- header,
+# tab bar, subheading, scope note -- costs roughly 330px. MAX_ASPECT * 1400 is
+# then the chart's on-screen height, and .40 leaves it at ~560px so both fit a
+# 900px laptop viewport with the trailing caption still visible.
+FIG_WIDTH = 10.0
+MAX_ASPECT = 0.40
+MAX_FIG_HEIGHT = FIG_WIDTH * MAX_ASPECT
 
 
 def _new_axes(figsize: tuple) -> tuple:
@@ -37,7 +49,7 @@ def _new_axes(figsize: tuple) -> tuple:
 
 def _heatmap_size(n_rows: int) -> tuple:
     """Grow with row count but stop before the chart needs scrolling."""
-    return (10, min(.6 * n_rows + 1.6, MAX_FIG_HEIGHT))
+    return (FIG_WIDTH, min(.6 * n_rows + 1.6, MAX_FIG_HEIGHT))
 
 
 def _style(ax, grid_axis: str = 'y') -> None:
@@ -162,7 +174,10 @@ def response_chart(bands: pd.DataFrame) -> Figure:
 
 def funnel_scatter(funnel: pd.DataFrame) -> Figure:
     """Reach (median views) against conversion (applications per view)."""
-    fig, ax = _new_axes((8.5, 5))
+    # FIG_WIDTH rather than a narrower figure: every chart is upscaled to the
+    # same container width, so a figure declared narrower is upscaled harder and
+    # its labels land visibly larger than the neighbouring tabs'.
+    fig, ax = _new_axes((FIG_WIDTH, MAX_FIG_HEIGHT))
     ax.scatter(funnel.views_p50, funnel.conversion_pct, s=170,
                color=BLUE, edgecolor='white', lw=1.6, zorder=3)
     for label, row in funnel.iterrows():

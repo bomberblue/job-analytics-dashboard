@@ -88,7 +88,9 @@ def main():
 
     render_header()
 
-    st.divider()
+    # No divider under the header: every view opens with its own tab strip,
+    # which draws a rule of its own, so a second one directly above it costs
+    # ~35px of the fold to draw the same line twice.
 
     # Route to appropriate view
     VIEWS[st.session_state.view_mode]()
