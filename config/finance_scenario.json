@@ -1,0 +1,9 @@
+{
+    "permanent_employer_burden_rate": 0.22,
+    "contract_employer_burden_rate": 0.02,
+    "contract_agency_premium_rate": 0.12,
+    "days_per_month": 30.3,
+    "cost_neutral_tolerance_rate": 0.03,
+    "salary_planning_cap_quantile": 0.995,
+    "min_cohort_postings": 30
+}
