@@ -35,6 +35,18 @@ st.html("""
         padding-top: 4.5rem;
         padding-bottom: 2rem;
     }
+
+    /* Scoped to the nav chips' own container (render_nav()'s st.container(key=
+       "nav_chips")), not every button in the app - a button added elsewhere
+       later shouldn't silently inherit sizing meant for chip-length sentences. */
+    .st-key-nav_chips button {
+        height: auto;
+        min-height: 3.4rem;
+        padding: 0.65rem 1rem;
+        font-size: 0.95rem;
+        white-space: normal;
+        line-height: 1.35;
+    }
 </style>
 """)
 
@@ -67,19 +79,44 @@ def initialize_session():
 
 
 def render_header():
-    """Title and view switch on one line, so the charts start higher up."""
-    col1, col2 = st.columns([2, 3], vertical_alignment="center")
-    with col1:
-        st.markdown("#### 📊 Singapore Jobs Analytics")
-    with col2:
-        selected = st.segmented_control(
-            "Select view", list(VIEWS),
-            default=st.session_state.view_mode,
-            label_visibility="collapsed",
-            key="view_switch",
-        )
-    # Clicking the active segment clears the selection; stay on the current board.
-    st.session_state.view_mode = selected or st.session_state.view_mode
+    """Just the title - the chip row below is the only nav now."""
+    st.markdown("#### 📊 Singapore Jobs Analytics")
+
+
+# (view, chip label) - one per VIEWS entry, same order. Asserted below rather
+# than left as a comment, so a board added/renamed/reordered in VIEWS without
+# a matching NAV_CHIPS update fails loudly instead of silently mis-navigating.
+NAV_CHIPS = [
+    ("Market Overview", "📈 Market Overview — market trends and pay dynamics"),
+    ("Hirer", "🧑‍💼 Hirers — pay benchmarks & response diagnostics"),
+    ("Seeker", "🔍 Job Seekers — pay checks & competitiveness"),
+    ("Finance Partner", "💼 Finance Business Partner — cost mix & budget risk"),
+]
+assert [view for view, _ in NAV_CHIPS] == list(VIEWS), (
+    f"NAV_CHIPS must list VIEWS's keys, in order: "
+    f"got {[v for v, _ in NAV_CHIPS]}, expected {list(VIEWS)}"
+)
+
+
+def _select_view(view):
+    st.session_state.view_mode = view
+
+
+def render_nav():
+    """The four chips are the whole nav - no separate view switch. The active
+    view's chip is disabled rather than just styled differently: clicking it
+    would be a no-op anyway, and a disabled button is Streamlit's plainest way
+    to say "you're already here"."""
+    st.caption("This analytics dashboard provides insights into Singapore's job market:")
+    with st.container(key="nav_chips"):
+        cols = st.columns(len(NAV_CHIPS))
+        for col, (view, label) in zip(cols, NAV_CHIPS):
+            with col:
+                st.button(
+                    label, key=f"nav_chip_{view}", use_container_width=True,
+                    on_click=_select_view, args=(view,),
+                    disabled=(view == st.session_state.view_mode),
+                )
 
 
 def main():
@@ -87,22 +124,17 @@ def main():
     initialize_session()
 
     render_header()
+    render_nav()
 
+    # Separates the nav row from the board below. Hirer's own tab strip draws
+    # a second rule right under this one - a minor redundancy on that one
+    # board, left as-is rather than special-cased, since the other three boards
+    # have no header or tabs of their own and need this divider to have any
+    # separation at all.
     st.divider()
 
     # Route to appropriate view
     VIEWS[st.session_state.view_mode]()
-
-    st.divider()
-    st.markdown("""
-    ---
-    **About this Dashboard**
-    
-    This analytics dashboard provides insights into Singapore's job market. 
-    - **Hirers** can identify market trends and top roles
-    - **Job Seekers** can benchmark salaries, find opportunities, and understand market competitiveness
-    - **Finance Partners** can evaluate workforce-cost mix and vacancy budget risk
-    """)
 
 
 if __name__ == "__main__":

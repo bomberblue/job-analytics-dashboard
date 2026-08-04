@@ -6,6 +6,7 @@ import streamlit as st
 
 from config.finance_scenario import load_finance_scenario
 from src.dashboard.utils import create_metric_columns, format_currency, format_percentage
+from src.dashboard.theme import PAY_COLOR
 
 
 REQUIRED_FINANCE_TABLES = [
@@ -186,6 +187,10 @@ def _fetch_headline_metrics(db, params: dict, year: int, sector: str, sub_sector
     )
 
 
+# market_overview.py's fetch_contract_premium re-derives this same Contract-vs-
+# Permanent cohort comparison at coarser (sector-only) grain for its cross-view
+# correlation; mirror any change to the cohort definition or sample threshold
+# there too.
 def _conversion_base_sql(where: str, params: dict) -> str:
     priced = _priced_job_features_sql(params)
     tolerance = params["cost_neutral_tolerance_rate"]
@@ -472,8 +477,8 @@ def _format_conversion_candidates_table(df):
 
 
 def render_finance_view():
-    """Render Finance Business Partner view for workforce-cost and budget risk."""
-    st.header("💼 Finance Business Partner View")
+    """Render Finance Business Partner view for workforce-cost and budget risk.
+    No header - the nav chip above already names the board."""
     st.caption(
         "Translate workforce mix and hiring-speed decisions into dollars, so Finance can "
         "approve or challenge contract-vs-permanent budget shifts."
@@ -774,7 +779,7 @@ def render_finance_view():
             chart_data = top_positions[["position_level", "total_vacancy_budget_exposure"]].copy()
             chart = (
                 alt.Chart(chart_data)
-                .mark_bar(color="#7ec3ff")
+                .mark_bar(color=PAY_COLOR)
                 .encode(
                     x=alt.X(
                         "position_level:N",

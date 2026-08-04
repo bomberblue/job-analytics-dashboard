@@ -92,6 +92,32 @@ def _config_panel(active: str) -> dict:
     }
 
 
+def _money(value: float) -> str:
+    r"""Format a salary for markdown, escaping the dollar sign.
+
+    Streamlit renders markdown as LaTeX between a pair of '$', so a string
+    quoting two amounts loses everything between them to italic math. The
+    escape has to survive the f-string, hence '\\$'.
+    """
+    return f"\\${value:,.0f}"
+
+
+def _escape_money(text: str) -> str:
+    """Same escape for label text that already carries a '$' (the pay bands)."""
+    return text.replace("$", "\\$")
+
+
+def _section_title(text: str) -> None:
+    """Tab heading, one level below st.subheader.
+
+    The tab label already names the section, so an h3 here spends vertical space
+    restating it and pushes the taller charts below the fold. h5 keeps the
+    heading -- several say more than their tab label does -- at about half the
+    height.
+    """
+    st.markdown(f"##### {text}")
+
+
 def _sentinel_to_none(value, all_label: str):
     """Session state holds the raw selectbox choice, including the "all" label."""
     return None if value is None or value == all_label else value
@@ -131,7 +157,7 @@ def _too_thin(sector: str | None, what: str) -> None:
 
 def _render_salary_benchmark(cfg: dict) -> None:
     """#1 -- layer 1 s.3, the core deliverable."""
-    st.subheader("What comparable employers pay")
+    _section_title("What comparable employers pay")
     _layer1_note()
     bench = hirer_data_loader.salary_lookup(cfg['sector'], cfg['level'],
                                             cfg['experience'], cfg['yrs_bucket'])
@@ -149,19 +175,19 @@ def _render_salary_benchmark(cfg: dict) -> None:
     if cfg['salary']:
         if cfg['salary'] < bench['mid_p25']:
             st.warning(
-                f"Your ${cfg['salary']:,.0f} sits below the 25th percentile "
-                f"(${bench['mid_p25']:,.0f}) for comparable postings."
+                f"Your {_money(cfg['salary'])} sits below the 25th percentile "
+                f"({_money(bench['mid_p25'])}) for comparable postings."
             )
         elif cfg['salary'] > bench['mid_p75']:
             st.info(
-                f"Your ${cfg['salary']:,.0f} sits above the 75th percentile "
-                f"(${bench['mid_p75']:,.0f}) for comparable postings."
+                f"Your {_money(cfg['salary'])} sits above the 75th percentile "
+                f"({_money(bench['mid_p75'])}) for comparable postings."
             )
 
 
 def _render_norms(cfg: dict) -> None:
     """#3 -- layer 1 s.4."""
-    st.subheader("Experience asked, by position level")
+    _section_title("Experience asked, by position level")
     _layer1_note()
     norms = hirer_data_loader.config_norms(cfg['sector'])
     if norms.empty:
@@ -185,7 +211,10 @@ def _render_norms(cfg: dict) -> None:
     if marked and cfg['level'] in norms.index and cfg['yrs_bucket'] in norms.columns:
         share = norms.loc[cfg['level'], cfg['yrs_bucket']]
         if share < 1.0:
-            st.warning(
+            # info, not warning: a rare pairing is a factual oddity, not a cost.
+            # As a warning it competed with the repost danger zone, which is the
+            # one alert in this view that quantifies what it costs the hirer.
+            st.info(
                 f"Fewer than 1% of **{cfg['level']}** postings ask for "
                 f"**{cfg['yrs_bucket']}** years ({share:.2f}%). This pairing is one "
                 "the market essentially never uses."
@@ -194,7 +223,7 @@ def _render_norms(cfg: dict) -> None:
 
 def _render_response(cfg: dict) -> None:
     """#6 -- layer 2 s.3."""
-    st.subheader("Applicant response by pay band")
+    _section_title("Applicant response by pay band")
     bands = hirer_data_loader.response_by_pay_band(cfg['sector'])
     if bands.empty:
         _too_thin(cfg['sector'], "applicant response")
@@ -215,12 +244,12 @@ def _render_response(cfg: dict) -> None:
                   help=f"P10–P90: {row.apps_p10:.0f}–{row.apps_p90:.0f}")
         c2.metric("Under-filled risk", f"{row.under_filled:.0%}")
         c3.metric("Comparable postings", f"{int(row.n):,}")
-        st.caption(f"For your pay band: **{cfg['pay_band']}**")
+        st.caption(f"For your pay band: **{_escape_money(cfg['pay_band'])}**")
 
 
 def _render_funnel(cfg: dict) -> None:
     """#7 -- layer 2 s.4."""
-    st.subheader("Reach or conversion — which is the problem?")
+    _section_title("Reach or conversion — which is the problem?")
     funnel = hirer_data_loader.funnel_by_pay_band(cfg['sector'])
     if funnel.empty:
         _too_thin(cfg['sector'], "reach and conversion")
@@ -238,7 +267,7 @@ def _render_funnel(cfg: dict) -> None:
 
 def _render_repost_risk(cfg: dict) -> None:
     """#8 -- layer 2 s.5-6, the headline finding."""
-    st.subheader("Repost risk: experience asked against pay offered")
+    _section_title("Repost risk: experience asked against pay offered")
     rates = hirer_data_loader.repost_matrix(cfg['sector'])
     if rates.notna().to_numpy().sum() == 0:
         _too_thin(cfg['sector'], "repost risk")
@@ -266,8 +295,12 @@ def _render_repost_risk(cfg: dict) -> None:
         row = contrast.loc[cfg['pay_band']]
         if row.repost_gte3 > row.repost_lt3:
             where = f"in **{cfg['sector']}**" if cfg['sector'] else "across all sectors"
-            st.warning(
-                f"**Danger zone.** In the {cfg['pay_band']} band {where}, postings "
+            # The only alert here that puts a number on what the configuration
+            # costs, so it gets the one red in the view. Everything else is
+            # warning (a risk) or info (worth knowing).
+            st.error(
+                f"**Danger zone.** In the {_escape_money(cfg['pay_band'])} band "
+                f"{where}, postings "
                 f"asking 3+ years were reposted {row.repost_gte3:.1f}% of the time "
                 f"against {row.repost_lt3:.1f}% for those asking less "
                 f"({int(row.n):,} postings). Consider raising the pay band or "
@@ -297,7 +330,7 @@ assert {label for label, _ in SECTIONS} == set(TAB_CONTROLS), (
 def render_hirer_view():
     """Render hirer-focused dashboard.
 
-    No board-level header: the view switch above already names it, and the
+    No board-level header: the nav chip above already names it, and the
     heading cost enough vertical space to push the taller charts off-screen.
     """
     # The sidebar is built before the tabs exist, so the open tab comes from the
