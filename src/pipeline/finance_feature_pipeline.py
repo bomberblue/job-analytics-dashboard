@@ -12,31 +12,29 @@ import pandas as pd
 import duckdb
 
 from config.settings import DUCKDB_FILE
+from config.finance_scenario import load_finance_scenario
 
 
-PERMANENT_EMPLOYER_BURDEN_RATE = 0.17
-CONTRACT_EMPLOYER_BURDEN_RATE = 0.02
-CONTRACT_AGENCY_PREMIUM_RATE = 0.12
-DAYS_PER_MONTH = 30.3
-COST_NEUTRAL_TOLERANCE_RATE = 0.03
-SALARY_PLANNING_CAP_QUANTILE = 0.995
-MIN_COHORT_POSTINGS = 30
+_SCENARIO = load_finance_scenario()
+
+# finance_job_features still bakes these in so finance_industry_budget_risk and
+# finance_permanent_contract_conversion_economics (offline snapshot tables, not
+# read live by the dashboard) have self-consistent numbers. The live dashboard
+# overrides these at query time from the same finance_scenario.json -- see
+# _priced_job_features_sql() in src/dashboard/finance_view.py -- so changing
+# the rates below does not by itself require a pipeline reload for the
+# dashboard to reflect them; it only re-syncs these two snapshot tables.
+PERMANENT_EMPLOYER_BURDEN_RATE = _SCENARIO["permanent_employer_burden_rate"]
+CONTRACT_EMPLOYER_BURDEN_RATE = _SCENARIO["contract_employer_burden_rate"]
+CONTRACT_AGENCY_PREMIUM_RATE = _SCENARIO["contract_agency_premium_rate"]
+DAYS_PER_MONTH = _SCENARIO["days_per_month"]
+COST_NEUTRAL_TOLERANCE_RATE = _SCENARIO["cost_neutral_tolerance_rate"]
+SALARY_PLANNING_CAP_QUANTILE = _SCENARIO["salary_planning_cap_quantile"]
+MIN_COHORT_POSTINGS = _SCENARIO["min_cohort_postings"]
 
 
 def _build_scenario_df() -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "permanent_employer_burden_rate": PERMANENT_EMPLOYER_BURDEN_RATE,
-                "contract_employer_burden_rate": CONTRACT_EMPLOYER_BURDEN_RATE,
-                "contract_agency_premium_rate": CONTRACT_AGENCY_PREMIUM_RATE,
-                "days_per_month": DAYS_PER_MONTH,
-                "cost_neutral_tolerance_rate": COST_NEUTRAL_TOLERANCE_RATE,
-                "salary_planning_cap_quantile": SALARY_PLANNING_CAP_QUANTILE,
-                "min_cohort_postings": MIN_COHORT_POSTINGS,
-            }
-        ]
-    )
+    return pd.DataFrame([_SCENARIO])
 
 
 def _classify_employment_cohort(job_type: pd.Series) -> pd.Series:
