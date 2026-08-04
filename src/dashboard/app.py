@@ -99,7 +99,8 @@ def main():
     **About this Dashboard**
     
     This analytics dashboard provides insights into Singapore's job market. 
-    - **Hirers** can identify market trends and top roles
+    - **Hirers** can benchmark a planned salary against comparable postings, check
+      experience norms, and see where a vacancy risks under-filling or being reposted
     - **Job Seekers** can benchmark salaries, find opportunities, and understand market competitiveness
     - **Finance Partners** can evaluate workforce-cost mix and vacancy budget risk
     """)
