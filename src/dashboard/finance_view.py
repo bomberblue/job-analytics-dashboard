@@ -304,8 +304,8 @@ def _safe_pct(numerator, denominator):
 
 
 def render_finance_view():
-    """Render Finance Business Partner view for workforce-cost and budget risk."""
-    st.header("💼 Finance Business Partner View")
+    """Render Finance Business Partner view for workforce-cost and budget risk.
+    No header - the nav chip above already names the board."""
     st.caption(
         "Translate workforce mix and hiring-speed decisions into dollars, so Finance can "
         "approve or challenge contract-vs-permanent budget shifts."

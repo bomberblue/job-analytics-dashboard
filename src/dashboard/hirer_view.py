@@ -330,7 +330,7 @@ assert {label for label, _ in SECTIONS} == set(TAB_CONTROLS), (
 def render_hirer_view():
     """Render hirer-focused dashboard.
 
-    No board-level header: the view switch above already names it, and the
+    No board-level header: the nav chip above already names it, and the
     heading cost enough vertical space to push the taller charts off-screen.
     """
     # The sidebar is built before the tabs exist, so the open tab comes from the
