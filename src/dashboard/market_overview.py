@@ -748,6 +748,11 @@ MIN_LEVERAGE_SAMPLE = 2000
 # before its cost premium is trusted - matches finance_view's own threshold.
 MIN_CONTRACT_COHORT_SAMPLE = 30
 
+# Minimum postings a sector needs, in the counters-complete 30-day-listing
+# cohort, before its repost rate is trusted - matches hirer_data_loader.MIN_N,
+# the smallest cell hirer's own repost figures are read from. Move together.
+MIN_REPOST_SAMPLE = 30
+
 # Below this many industries, a correlation coefficient is noise, not a finding.
 MIN_SECTORS_FOR_CORRELATION = 5
 
@@ -840,6 +845,61 @@ def fetch_contract_premium(db, position_level=None, min_cohort=MIN_CONTRACT_COHO
     return db.query(sql)
 
 
+@st.cache_data
+def fetch_repost_rate_by_sector(_db, position_level=None, min_n=MIN_REPOST_SAMPLE):
+    """
+    Return, per industry, the share of postings that were reposted - Hirer's
+    headline finding, re-derived at sector grain for the cross-view
+    correlation below.
+
+    Mirrors hirer_data_loader._layer2_cohort()'s cohort definition (counters
+    complete, 30-day listings) in SQL rather than calling into that module -
+    same "coarser sector-only re-derivation, not a call into it" pattern
+    fetch_contract_premium already uses, keeping the view modules independent.
+    """
+    position_filter = _position_level_filter(position_level)
+    sql = f"""
+        WITH {DEDUPED_JOBS_CTE},
+        cohort AS (
+            SELECT sector, is_repost
+            FROM deduped_jobs
+            WHERE expiry_date <= '{ENGAGEMENT_DATA_END_DATE}'
+              AND listing_days = 30
+              AND sector IS NOT NULL
+              {position_filter}
+        )
+        SELECT sector, AVG(is_repost::INT) * 100 AS repost_rate_pct, COUNT(*) AS n
+        FROM cohort
+        GROUP BY sector
+        HAVING COUNT(*) >= {int(min_n)}
+    """
+    return _db.query(sql)
+
+
+def fetch_exposure_by_sector(db, position_level=None):
+    """
+    Return, per industry, median vacancy budget exposure per opening - the
+    cost accrued while a vacancy sits open, from Finance's pipeline.
+
+    Reads finance_job_features.vacancy_exposure_per_opening directly, the
+    value baked in at the last pipeline run - deliberately not recomputed
+    from finance_view's live scenario sliders, matching fetch_contract_premium's
+    existing behavior (same accepted staleness trade-off, not a new one).
+    Empty if the finance pipeline hasn't been run yet.
+    """
+    if not _table_exists(db, 'finance_job_features'):
+        return pd.DataFrame()
+    position_filter = _position_level_filter(position_level)
+    sql = f"""
+        SELECT sector, MEDIAN(vacancy_exposure_per_opening) AS median_exposure_per_opening
+        FROM finance_job_features
+        WHERE sector IS NOT NULL
+        {position_filter}
+        GROUP BY sector
+    """
+    return db.query(sql)
+
+
 def _scatter_with_extreme_labels(df, x_col, y_col, x_title, y_title, tooltip_fmt, n_labeled=2):
     """
     A single-color scatter (one dot per industry) with sparse text labels on
@@ -868,6 +928,8 @@ def render_cross_view_insight(db, sector=None, position_level=None):
     The capstone: does pay actually respond to how hard a role is to fill, and
     does the standard cost-saving lever (converting permanent roles to
     contract) target the industries that actually need that flexibility?
+    Also tests whether repost rate tracks median vacancy budget exposure per
+    opening by industry.
 
     Compares across all industries at once, so - like fetch_sector_mix_shift -
     this only renders for "All Sectors"; position_level may still narrow it.
@@ -887,56 +949,96 @@ def render_cross_view_insight(db, sector=None, position_level=None):
             f"Not enough industries with sufficient sample size ({MIN_LEVERAGE_SAMPLE:,}+ "
             "postings, before the engagement-data cutoff) to test this under the current filter."
         )
-        return
+    else:
+        leverage_pay_corr = leverage_df['applicants_per_opening'].corr(leverage_df['median_pay'])
 
-    leverage_pay_corr = leverage_df['applicants_per_opening'].corr(leverage_df['median_pay'])
-
-    premium_df = fetch_contract_premium(db, position_level=position_level)
-    combined = (
-        premium_df.merge(leverage_df[['sector', 'applicants_per_opening']], on='sector')
-        if not premium_df.empty else pd.DataFrame()
-    )
-    premium_corr = (
-        combined['applicants_per_opening'].corr(combined['contract_premium_pct'])
-        if len(combined) >= MIN_SECTORS_FOR_CORRELATION else None
-    )
-
-    stats = {"Correlation: Leverage vs. Pay": f"{leverage_pay_corr:+.2f}"}
-    if premium_corr is not None:
-        stats["Correlation: Leverage vs. Contract Premium"] = f"{premium_corr:+.2f}"
-    create_metric_columns(stats)
-    st.caption(
-        "Correlation coefficients, -1 to +1. Leverage vs. Pay near zero means pay "
-        "does not track how competitive an industry is to hire in. A negative "
-        "Leverage vs. Contract Premium means converting to contract saves the "
-        "least money exactly where competition for talent is fiercest - the "
-        "opposite of where that flexibility is actually needed."
-    )
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.caption(f"Applicants per Opening vs. Median Pay ({len(leverage_df)} industries)")
-        st.altair_chart(
-            _scatter_with_extreme_labels(
-                leverage_df, 'applicants_per_opening', 'median_pay',
-                'Applicants per Opening', 'Median Pay ($)', ',.0f'
-            ),
-            width='stretch'
+        premium_df = fetch_contract_premium(db, position_level=position_level)
+        combined = (
+            premium_df.merge(leverage_df[['sector', 'applicants_per_opening']], on='sector')
+            if not premium_df.empty else pd.DataFrame()
         )
-    with col2:
-        st.caption(f"Applicants per Opening vs. Contract Premium ({len(combined)} industries)")
-        if combined.empty:
-            st.info(
-                "Requires the finance pipeline's tables, which aren't materialized in "
-                "this database yet."
-            )
-        else:
+        premium_corr = (
+            combined['applicants_per_opening'].corr(combined['contract_premium_pct'])
+            if len(combined) >= MIN_SECTORS_FOR_CORRELATION else None
+        )
+
+        stats = {"Correlation: Leverage vs. Pay": f"{leverage_pay_corr:+.2f}"}
+        if premium_corr is not None:
+            stats["Correlation: Leverage vs. Contract Premium"] = f"{premium_corr:+.2f}"
+        create_metric_columns(stats)
+        st.caption(
+            "Correlation coefficients, -1 to +1. Leverage vs. Pay near zero means pay "
+            "does not track how competitive an industry is to hire in. A negative "
+            "Leverage vs. Contract Premium means converting to contract saves the "
+            "least money exactly where competition for talent is fiercest - the "
+            "opposite of where that flexibility is actually needed."
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.caption(f"Applicants per Opening vs. Median Pay ({len(leverage_df)} industries)")
             st.altair_chart(
                 _scatter_with_extreme_labels(
-                    combined, 'applicants_per_opening', 'contract_premium_pct',
-                    'Applicants per Opening', 'Contract Premium (%)', '+.1f'
+                    leverage_df, 'applicants_per_opening', 'median_pay',
+                    'Applicants per Opening', 'Median Pay ($)', ',.0f'
                 ),
                 width='stretch'
+            )
+        with col2:
+            st.caption(f"Applicants per Opening vs. Contract Premium ({len(combined)} industries)")
+            if combined.empty:
+                st.info(
+                    "Requires the finance pipeline's tables, which aren't materialized in "
+                    "this database yet."
+                )
+            else:
+                st.altair_chart(
+                    _scatter_with_extreme_labels(
+                        combined, 'applicants_per_opening', 'contract_premium_pct',
+                        'Applicants per Opening', 'Contract Premium (%)', '+.1f'
+                    ),
+                    width='stretch'
+                )
+
+    st.divider()
+    st.markdown("#### Where Reposting Meets Budget Risk")
+    st.caption(
+        "Repost rate against median vacancy budget exposure per opening, by "
+        "industry: do the sectors most likely to repost a vacancy also cost "
+        "the most while it sits open?"
+    )
+
+    repost_df = fetch_repost_rate_by_sector(db, position_level=position_level)
+    exposure_df = fetch_exposure_by_sector(db, position_level=position_level)
+    if exposure_df.empty:
+        st.info(
+            "Requires the finance pipeline's tables, which aren't materialized in "
+            "this database yet."
+        )
+    else:
+        risk_df = repost_df.merge(exposure_df, on='sector')
+        if len(risk_df) < MIN_SECTORS_FOR_CORRELATION:
+            st.info(
+                f"Not enough industries with sufficient sample size ({MIN_REPOST_SAMPLE:,}+ "
+                "postings in the counters-complete, 30-day-listing cohort) to test this "
+                "under the current filter."
+            )
+        else:
+            risk_corr = risk_df['repost_rate_pct'].corr(risk_df['median_exposure_per_opening'])
+            create_metric_columns({"Correlation: Repost Rate vs. Exposure/Opening": f"{risk_corr:+.2f}"})
+            st.caption(f"Repost Rate vs. Median Exposure per Opening ({len(risk_df)} industries)")
+            st.altair_chart(
+                _scatter_with_extreme_labels(
+                    risk_df, 'repost_rate_pct', 'median_exposure_per_opening',
+                    'Repost Rate (%)', 'Median Exposure per Opening ($)', ',.0f'
+                ),
+                width='stretch'
+            )
+            st.caption(
+                "Sectors in the upper right are paying twice - once in the "
+                "re-posting cycle, again in accrued vacancy cost. That combination "
+                "is the priority list for the pay/experience-ask fix Hirer's own "
+                "repost analysis recommends, not exposure or repost risk alone."
             )
 
 
