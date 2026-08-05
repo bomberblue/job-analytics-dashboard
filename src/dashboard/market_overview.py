@@ -876,6 +876,30 @@ def fetch_repost_rate_by_sector(_db, position_level=None, min_n=MIN_REPOST_SAMPL
     return _db.query(sql)
 
 
+def fetch_exposure_by_sector(db, position_level=None):
+    """
+    Return, per industry, median vacancy budget exposure per opening - the
+    cost accrued while a vacancy sits open, from Finance's pipeline.
+
+    Reads finance_job_features.vacancy_exposure_per_opening directly, the
+    value baked in at the last pipeline run - deliberately not recomputed
+    from finance_view's live scenario sliders, matching fetch_contract_premium's
+    existing behavior (same accepted staleness trade-off, not a new one).
+    Empty if the finance pipeline hasn't been run yet.
+    """
+    if not _table_exists(db, 'finance_job_features'):
+        return pd.DataFrame()
+    position_filter = _position_level_filter(position_level)
+    sql = f"""
+        SELECT sector, MEDIAN(vacancy_exposure_per_opening) AS median_exposure_per_opening
+        FROM finance_job_features
+        WHERE sector IS NOT NULL
+        {position_filter}
+        GROUP BY sector
+    """
+    return db.query(sql)
+
+
 def _scatter_with_extreme_labels(df, x_col, y_col, x_title, y_title, tooltip_fmt, n_labeled=2):
     """
     A single-color scatter (one dot per industry) with sparse text labels on

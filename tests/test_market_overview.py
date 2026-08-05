@@ -10,7 +10,7 @@ from src.dashboard.market_overview import (
     fetch_position_level_ranking, fetch_seasonality, compute_pct_change,
     _early_late_windows, fetch_wage_decomposition, fetch_sector_mix_shift,
     fetch_employment_type_mix, fetch_top_companies, MIN_SEGMENT_SIZE,
-    fetch_repost_rate_by_sector, MIN_REPOST_SAMPLE,
+    fetch_repost_rate_by_sector, MIN_REPOST_SAMPLE, fetch_exposure_by_sector,
 )
 
 
@@ -334,6 +334,25 @@ class TestFetchRepostRateBySector(unittest.TestCase):
     def test_position_level_filter_narrows_sectors(self):
         unfiltered = fetch_repost_rate_by_sector(self.db)
         filtered = fetch_repost_rate_by_sector(self.db, position_level="Executive")
+        self.assertLessEqual(len(filtered), len(unfiltered))
+
+
+class TestFetchExposureBySector(unittest.TestCase):
+    def setUp(self):
+        self.db = DatabaseManager()
+
+    def test_shape(self):
+        df = fetch_exposure_by_sector(self.db)
+        self.assertEqual(list(df.columns), ['sector', 'median_exposure_per_opening'])
+
+    def test_exposure_is_nonnegative(self):
+        df = fetch_exposure_by_sector(self.db)
+        if len(df) > 0:
+            self.assertTrue((df['median_exposure_per_opening'] >= 0).all())
+
+    def test_position_level_filter_narrows_sectors(self):
+        unfiltered = fetch_exposure_by_sector(self.db)
+        filtered = fetch_exposure_by_sector(self.db, position_level="Executive")
         self.assertLessEqual(len(filtered), len(unfiltered))
 
 
