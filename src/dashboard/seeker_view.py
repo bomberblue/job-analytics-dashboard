@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import streamlit as st
+import streastreamlit as st
 from src.dashboard.utils import (
     format_currency,
     format_currency_2dp,
@@ -40,14 +40,8 @@ def _cached_sector_list(db_path, db_mod_time):
 
 
 @st.cache_data(show_spinner='Loading seeker dataset…')
-def _cached_seeker_dataset(db_path, db_mod_time, industry=None):
-    where = (
-        "posting_date IS NOT NULL AND salary_min IS NOT NULL "
-        "AND salary_max IS NOT NULL AND salary_min >= 500 "
-        "AND salary_max <= 100000 AND (seniority_years IS NULL OR seniority_years <= 30)"
-    )
-    if industry:
-        where += f" AND sector = '{industry}'"
+def _cached_seeker_dataset(db_path, db_mod_time, industry=None, experience_level=None):
+    where = build_where_clause(sector=industry, experience_level=experience_level)
 
     sql = f"""
         SELECT
@@ -62,7 +56,7 @@ def _cached_seeker_dataset(db_path, db_mod_time, industry=None):
             vacancies,
             skills
         FROM jobs
-        WHERE {where}
+        {where}
     """
     df = _cached_query(db_path, db_mod_time, sql)
     if not df.empty:
@@ -73,9 +67,7 @@ def _cached_seeker_dataset(db_path, db_mod_time, industry=None):
 
 @st.cache_data(show_spinner='Loading seeker metrics…')
 def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
-    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, sector)
-    if experience_level:
-        seeker_df = seeker_df[seeker_df['experience_level'] == experience_level]
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, sector, experience_level)
 
     metrics = {
         'opportunities': pd.DataFrame([{
@@ -164,17 +156,15 @@ def build_where_clause(sector=None, experience_level=None, seniority_years=None)
 
 @st.cache_data(show_spinner='Loading salary percentile…')
 def _fetch_salary_percentile(db_path, db_mod_time, industry=None, experience_level=None, salary=None):
-    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
-    if experience_level:
-        seeker_df = seeker_df[seeker_df['experience_level'] == experience_level]
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry, experience_level)
     if salary is None:
         salary = 0
     if seeker_df.empty:
         return pd.DataFrame([{'percentile': float('nan'), 'comparable_postings': 0}])
 
     total = len(seeker_df)
-    lower_count = int((seeker_df['market_salary'] < float(salary)).sum())
-    percentile = round(100 * (1 - lower_count / total), 1)
+    lower_count = int((seeker_df['market_salary'] <= float(salary)).sum())
+    percentile = round(100 * lower_count / total, 1)
     return pd.DataFrame([{
         'percentile': percentile,
         'comparable_postings': int(total),
@@ -187,8 +177,8 @@ def fetch_salary_percentile(db, industry=None, experience_level=None, salary=Non
 
 
 @st.cache_data(show_spinner='Loading pay-by-experience data…')
-def _fetch_pay_by_experience_years(db_path, db_mod_time, industry=None):
-    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
+def _fetch_pay_by_experience_years(db_path, db_mod_time, industry=None, experience_level=None):
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry, experience_level)
     seeker_df = seeker_df.dropna(subset=['seniority_years'])
     if seeker_df.empty:
         return pd.DataFrame(columns=['seniority_years', 'median_salary'])
@@ -204,14 +194,14 @@ def _fetch_pay_by_experience_years(db_path, db_mod_time, industry=None):
     return result
 
 
-def fetch_pay_by_experience_years(db, industry=None):
+def fetch_pay_by_experience_years(db, industry=None, experience_level=None):
     """Return median pay by required years of experience."""
-    return _fetch_pay_by_experience_years(db.db_path, _db_mod_time(db), industry)
+    return _fetch_pay_by_experience_years(db.db_path, _db_mod_time(db), industry, experience_level)
 
 
 @st.cache_data(show_spinner='Loading seniority ladder…')
-def _fetch_seniority_ladder(db_path, db_mod_time, industry=None):
-    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
+def _fetch_seniority_ladder(db_path, db_mod_time, industry=None, experience_level=None):
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry, experience_level)
     if seeker_df.empty:
         return pd.DataFrame(columns=['position_level', 'median_salary'])
 
@@ -227,14 +217,14 @@ def _fetch_seniority_ladder(db_path, db_mod_time, industry=None):
     return result
 
 
-def fetch_seniority_ladder(db, industry=None):
+def fetch_seniority_ladder(db, industry=None, experience_level=None):
     """Return median pay by the experience ladder for a chosen industry."""
-    return _fetch_seniority_ladder(db.db_path, _db_mod_time(db), industry)
+    return _fetch_seniority_ladder(db.db_path, _db_mod_time(db), industry, experience_level)
 
 
 @st.cache_data(show_spinner='Loading pay-range data…')
-def _fetch_pay_range_by_industry_level(db_path, db_mod_time, industry=None, limit=10):
-    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
+def _fetch_pay_range_by_industry_level(db_path, db_mod_time, industry=None, experience_level=None, limit=10):
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry, experience_level)
     seeker_df = seeker_df.dropna(subset=['sector', 'experience_level'])
     if seeker_df.empty:
         return pd.DataFrame(columns=['sector', 'experience_level', 'pay_range'])
@@ -249,16 +239,14 @@ def _fetch_pay_range_by_industry_level(db_path, db_mod_time, industry=None, limi
     return result
 
 
-def fetch_pay_range_by_industry_level(db, industry=None, limit=10):
+def fetch_pay_range_by_industry_level(db, industry=None, experience_level=None, limit=10):
     """Return pay range width by sector and experience level."""
-    return _fetch_pay_range_by_industry_level(db.db_path, _db_mod_time(db), industry, limit)
+    return _fetch_pay_range_by_industry_level(db.db_path, _db_mod_time(db), industry, experience_level, limit)
 
 
 @st.cache_data(show_spinner='Loading competition metrics…')
 def _fetch_competition_metrics(db_path, db_mod_time, industry=None, experience_level=None, limit=10):
-    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
-    if experience_level:
-        seeker_df = seeker_df[seeker_df['experience_level'] == experience_level]
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry, experience_level)
     if seeker_df.empty:
         return pd.DataFrame(columns=['job_label', 'postings', 'competition_ratio', 'median_salary', 'competition_type'])
 
@@ -360,11 +348,13 @@ def render_seeker_view():
         st.session_state.db.db_path,
         _db_mod_time(st.session_state.db),
         industry,
+        exp,
     )
     pay_range_df = _fetch_pay_range_by_industry_level(
         st.session_state.db.db_path,
         _db_mod_time(st.session_state.db),
         industry,
+        exp,
         limit=10,
     )
     competition_df = _fetch_competition_metrics(
