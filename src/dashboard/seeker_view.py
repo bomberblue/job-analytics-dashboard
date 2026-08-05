@@ -139,24 +139,6 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
     return metrics
 
 
-@st.cache_data(show_spinner='Loading seeker view bundle…')
-def _cached_seeker_view_bundle(db_path, db_mod_time, experience_level, industry, salary_input):
-    metrics = _cached_seeker_metrics(db_path, db_mod_time, experience_level, industry)
-    percentile_df = _fetch_salary_percentile(db_path, db_mod_time, industry, experience_level, salary_input)
-    experience_years_df = _fetch_pay_by_experience_years(db_path, db_mod_time, industry)
-    ladder_df = _fetch_seniority_ladder(db_path, db_mod_time, industry)
-    pay_range_df = _fetch_pay_range_by_industry_level(db_path, db_mod_time, industry, limit=10)
-    competition_df = _fetch_competition_metrics(db_path, db_mod_time, industry, experience_level, limit=10)
-    return {
-        'metrics': metrics,
-        'percentile_df': percentile_df,
-        'experience_years_df': experience_years_df,
-        'ladder_df': ladder_df,
-        'pay_range_df': pay_range_df,
-        'competition_df': competition_df,
-    }
-
-
 def build_where_clause(sector=None, experience_level=None, seniority_years=None):
     """Build a composable SQL WHERE clause for seeker analytics.
 
@@ -362,19 +344,37 @@ def render_seeker_view():
     with col4:
         st.write("")  # Spacing
 
-    bundle = _cached_seeker_view_bundle(
+    metrics = _cached_seeker_metrics(
         st.session_state.db.db_path,
         _db_mod_time(st.session_state.db),
         exp,
         industry,
+    )
+    percentile_df = _fetch_salary_percentile(
+        st.session_state.db.db_path,
+        _db_mod_time(st.session_state.db),
+        industry,
+        exp,
         salary_input,
     )
-    metrics = bundle['metrics']
-    percentile_df = bundle['percentile_df']
-    experience_years_df = bundle['experience_years_df']
-    ladder_df = bundle['ladder_df']
-    pay_range_df = bundle['pay_range_df']
-    competition_df = bundle['competition_df']
+    ladder_df = _fetch_seniority_ladder(
+        st.session_state.db.db_path,
+        _db_mod_time(st.session_state.db),
+        industry,
+    )
+    pay_range_df = _fetch_pay_range_by_industry_level(
+        st.session_state.db.db_path,
+        _db_mod_time(st.session_state.db),
+        industry,
+        limit=10,
+    )
+    competition_df = _fetch_competition_metrics(
+        st.session_state.db.db_path,
+        _db_mod_time(st.session_state.db),
+        industry,
+        exp,
+        limit=10,
+    )
 
     if not metrics['top_roles'].empty:
         metrics['top_roles']['job_label'] = metrics['top_roles']['title'].apply(
@@ -448,17 +448,10 @@ def render_seeker_view():
             else:
                 st.warning("You are below the typical market rate for this slice.")
 
-    st.subheader("Pay by Years of Experience Required")
-    if not experience_years_df.empty:
-        st.line_chart(
-            experience_years_df.set_index('seniority_years')['median_salary'],
-            color=PAY_COLOR,
-            width='stretch'
-        )
-
     st.subheader("Seniority Ladder")
     if not ladder_df.empty:
         ladder_df['position_level'] = make_unique_categorical(ladder_df['position_level'])
+        ladder_df = ladder_df.head(6)
         st.bar_chart(
             ladder_df.set_index('position_level')['median_salary'],
             color=PAY_COLOR,
@@ -467,7 +460,7 @@ def render_seeker_view():
 
     st.subheader("Pay Range Width by Industry & Level")
     if not pay_range_df.empty:
-        chart_df = pay_range_df.copy()
+        chart_df = pay_range_df.copy().head(8)
         chart_df['industry_level'] = chart_df['sector'].astype(str) + " - " + chart_df['experience_level'].astype(str)
         chart_df['pay_range'] = pd.to_numeric(chart_df['pay_range'], errors='coerce')
         st.bar_chart(
@@ -486,45 +479,39 @@ def render_seeker_view():
             'median_salary': 'Median Salary ($)',
             'competition_type': 'Competition Type'
         })
-        st.dataframe(
-            competition_df[['Role', 'Competition Type', 'Postings', 'Competition / Opening', 'Median Salary ($)']],
-            width='stretch',
-            hide_index=True
+        st.table(
+            competition_df[['Role', 'Competition Type', 'Postings', 'Competition / Opening', 'Median Salary ($)']].head(8)
         )
 
     # Top roles for seeker
     st.subheader("Best Opportunities")
     if not metrics['top_roles'].empty:
-        st.dataframe(
-            metrics['top_roles'].head(10).rename(columns={
-                'role': 'Role',
+        st.table(
+            metrics['top_roles'].head(6).rename(columns={
+                'job_label': 'Role',
                 'opportunities': 'Postings',
                 'avg_salary': 'Avg Salary ($)',
                 'num_companies': 'Companies'
-            }),
-            width='stretch',
-            hide_index=True
+            })
         )
 
     # Salary benchmarks
     st.subheader("Salary Benchmarks")
     if not metrics['salary_benchmarks'].empty:
-        st.dataframe(
-            metrics['salary_benchmarks'].head(10).rename(columns={
-                'role': 'Role',
+        st.table(
+            metrics['salary_benchmarks'].head(6).rename(columns={
+                'job_label': 'Role',
                 'experience_level': 'Level',
                 'p25': 'Entry ($)',
                 'median_max': 'Market Rate ($)',
                 'p90': 'Top 10% ($)'
-            }),
-            width='stretch',
-            hide_index=True
+            })
         )
 
     # Competitive skills
     st.subheader("High-Value Skills (Avg Salary)")
     if not metrics['competitive_skills'].empty:
-        skills_chart = metrics['competitive_skills'].head(10)
+        skills_chart = metrics['competitive_skills'].head(6)
         st.bar_chart(
             skills_chart.set_index('skill')['avg_salary'],
             color=PAY_COLOR,
