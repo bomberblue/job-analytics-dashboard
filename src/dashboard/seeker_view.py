@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import streastreamlit as st
+import streamlit as st
 from src.dashboard.utils import (
     format_currency,
     format_currency_2dp,
