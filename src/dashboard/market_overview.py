@@ -947,57 +947,56 @@ def render_cross_view_insight(db, sector=None, position_level=None):
             f"Not enough industries with sufficient sample size ({MIN_LEVERAGE_SAMPLE:,}+ "
             "postings, before the engagement-data cutoff) to test this under the current filter."
         )
-        return
+    else:
+        leverage_pay_corr = leverage_df['applicants_per_opening'].corr(leverage_df['median_pay'])
 
-    leverage_pay_corr = leverage_df['applicants_per_opening'].corr(leverage_df['median_pay'])
-
-    premium_df = fetch_contract_premium(db, position_level=position_level)
-    combined = (
-        premium_df.merge(leverage_df[['sector', 'applicants_per_opening']], on='sector')
-        if not premium_df.empty else pd.DataFrame()
-    )
-    premium_corr = (
-        combined['applicants_per_opening'].corr(combined['contract_premium_pct'])
-        if len(combined) >= MIN_SECTORS_FOR_CORRELATION else None
-    )
-
-    stats = {"Correlation: Leverage vs. Pay": f"{leverage_pay_corr:+.2f}"}
-    if premium_corr is not None:
-        stats["Correlation: Leverage vs. Contract Premium"] = f"{premium_corr:+.2f}"
-    create_metric_columns(stats)
-    st.caption(
-        "Correlation coefficients, -1 to +1. Leverage vs. Pay near zero means pay "
-        "does not track how competitive an industry is to hire in. A negative "
-        "Leverage vs. Contract Premium means converting to contract saves the "
-        "least money exactly where competition for talent is fiercest - the "
-        "opposite of where that flexibility is actually needed."
-    )
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.caption(f"Applicants per Opening vs. Median Pay ({len(leverage_df)} industries)")
-        st.altair_chart(
-            _scatter_with_extreme_labels(
-                leverage_df, 'applicants_per_opening', 'median_pay',
-                'Applicants per Opening', 'Median Pay ($)', ',.0f'
-            ),
-            width='stretch'
+        premium_df = fetch_contract_premium(db, position_level=position_level)
+        combined = (
+            premium_df.merge(leverage_df[['sector', 'applicants_per_opening']], on='sector')
+            if not premium_df.empty else pd.DataFrame()
         )
-    with col2:
-        st.caption(f"Applicants per Opening vs. Contract Premium ({len(combined)} industries)")
-        if combined.empty:
-            st.info(
-                "Requires the finance pipeline's tables, which aren't materialized in "
-                "this database yet."
-            )
-        else:
+        premium_corr = (
+            combined['applicants_per_opening'].corr(combined['contract_premium_pct'])
+            if len(combined) >= MIN_SECTORS_FOR_CORRELATION else None
+        )
+
+        stats = {"Correlation: Leverage vs. Pay": f"{leverage_pay_corr:+.2f}"}
+        if premium_corr is not None:
+            stats["Correlation: Leverage vs. Contract Premium"] = f"{premium_corr:+.2f}"
+        create_metric_columns(stats)
+        st.caption(
+            "Correlation coefficients, -1 to +1. Leverage vs. Pay near zero means pay "
+            "does not track how competitive an industry is to hire in. A negative "
+            "Leverage vs. Contract Premium means converting to contract saves the "
+            "least money exactly where competition for talent is fiercest - the "
+            "opposite of where that flexibility is actually needed."
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.caption(f"Applicants per Opening vs. Median Pay ({len(leverage_df)} industries)")
             st.altair_chart(
                 _scatter_with_extreme_labels(
-                    combined, 'applicants_per_opening', 'contract_premium_pct',
-                    'Applicants per Opening', 'Contract Premium (%)', '+.1f'
+                    leverage_df, 'applicants_per_opening', 'median_pay',
+                    'Applicants per Opening', 'Median Pay ($)', ',.0f'
                 ),
                 width='stretch'
             )
+        with col2:
+            st.caption(f"Applicants per Opening vs. Contract Premium ({len(combined)} industries)")
+            if combined.empty:
+                st.info(
+                    "Requires the finance pipeline's tables, which aren't materialized in "
+                    "this database yet."
+                )
+            else:
+                st.altair_chart(
+                    _scatter_with_extreme_labels(
+                        combined, 'applicants_per_opening', 'contract_premium_pct',
+                        'Applicants per Opening', 'Contract Premium (%)', '+.1f'
+                    ),
+                    width='stretch'
+                )
 
     st.divider()
     st.markdown("#### Where Reposting Meets Budget Risk")
