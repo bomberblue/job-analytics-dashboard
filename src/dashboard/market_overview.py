@@ -928,6 +928,8 @@ def render_cross_view_insight(db, sector=None, position_level=None):
     The capstone: does pay actually respond to how hard a role is to fill, and
     does the standard cost-saving lever (converting permanent roles to
     contract) target the industries that actually need that flexibility?
+    Also tests whether repost rate tracks median vacancy budget exposure per
+    opening by industry.
 
     Compares across all industries at once, so - like fetch_sector_mix_shift -
     this only renders for "All Sectors"; position_level may still narrow it.
