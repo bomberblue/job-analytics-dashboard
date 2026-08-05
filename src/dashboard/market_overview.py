@@ -748,6 +748,11 @@ MIN_LEVERAGE_SAMPLE = 2000
 # before its cost premium is trusted - matches finance_view's own threshold.
 MIN_CONTRACT_COHORT_SAMPLE = 30
 
+# Minimum postings a sector needs, in the counters-complete 30-day-listing
+# cohort, before its repost rate is trusted - matches hirer_data_loader.MIN_N,
+# the smallest cell hirer's own repost figures are read from. Move together.
+MIN_REPOST_SAMPLE = 30
+
 # Below this many industries, a correlation coefficient is noise, not a finding.
 MIN_SECTORS_FOR_CORRELATION = 5
 
@@ -838,6 +843,37 @@ def fetch_contract_premium(db, position_level=None, min_cohort=MIN_CONTRACT_COHO
         WHERE n_contract >= {int(min_cohort)} AND n_permanent >= {int(min_cohort)}
     """
     return db.query(sql)
+
+
+@st.cache_data
+def fetch_repost_rate_by_sector(_db, position_level=None, min_n=MIN_REPOST_SAMPLE):
+    """
+    Return, per industry, the share of postings that were reposted - Hirer's
+    headline finding, re-derived at sector grain for the cross-view
+    correlation below.
+
+    Mirrors hirer_data_loader._layer2_cohort()'s cohort definition (counters
+    complete, 30-day listings) in SQL rather than calling into that module -
+    same "coarser sector-only re-derivation, not a call into it" pattern
+    fetch_contract_premium already uses, keeping the view modules independent.
+    """
+    position_filter = _position_level_filter(position_level)
+    sql = f"""
+        WITH {DEDUPED_JOBS_CTE},
+        cohort AS (
+            SELECT sector, is_repost
+            FROM deduped_jobs
+            WHERE expiry_date <= '{ENGAGEMENT_DATA_END_DATE}'
+              AND listing_days = 30
+              AND sector IS NOT NULL
+              {position_filter}
+        )
+        SELECT sector, AVG(is_repost::INT) * 100 AS repost_rate_pct, COUNT(*) AS n
+        FROM cohort
+        GROUP BY sector
+        HAVING COUNT(*) >= {int(min_n)}
+    """
+    return _db.query(sql)
 
 
 def _scatter_with_extreme_labels(df, x_col, y_col, x_title, y_title, tooltip_fmt, n_labeled=2):
