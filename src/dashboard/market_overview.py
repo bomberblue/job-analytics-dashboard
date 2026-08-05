@@ -999,6 +999,47 @@ def render_cross_view_insight(db, sector=None, position_level=None):
                 width='stretch'
             )
 
+    st.divider()
+    st.markdown("#### Where Reposting Meets Budget Risk")
+    st.caption(
+        "Repost rate against median vacancy budget exposure per opening, by "
+        "industry: do the sectors most likely to repost a vacancy also cost "
+        "the most while it sits open?"
+    )
+
+    repost_df = fetch_repost_rate_by_sector(db, position_level=position_level)
+    exposure_df = fetch_exposure_by_sector(db, position_level=position_level)
+    if exposure_df.empty:
+        st.info(
+            "Requires the finance pipeline's tables, which aren't materialized in "
+            "this database yet."
+        )
+    else:
+        risk_df = repost_df.merge(exposure_df, on='sector')
+        if len(risk_df) < MIN_SECTORS_FOR_CORRELATION:
+            st.info(
+                f"Not enough industries with sufficient sample size ({MIN_REPOST_SAMPLE:,}+ "
+                "postings in the counters-complete, 30-day-listing cohort) to test this "
+                "under the current filter."
+            )
+        else:
+            risk_corr = risk_df['repost_rate_pct'].corr(risk_df['median_exposure_per_opening'])
+            create_metric_columns({"Correlation: Repost Rate vs. Exposure/Opening": f"{risk_corr:+.2f}"})
+            st.caption(f"Repost Rate vs. Median Exposure per Opening ({len(risk_df)} industries)")
+            st.altair_chart(
+                _scatter_with_extreme_labels(
+                    risk_df, 'repost_rate_pct', 'median_exposure_per_opening',
+                    'Repost Rate (%)', 'Median Exposure per Opening ($)', ',.0f'
+                ),
+                width='stretch'
+            )
+            st.caption(
+                "Sectors in the upper right are paying twice - once in the "
+                "re-posting cycle, again in accrued vacancy cost. That combination "
+                "is the priority list for the pay/experience-ask fix Hirer's own "
+                "repost analysis recommends, not exposure or repost risk alone."
+            )
+
 
 def render_market_overview_view():
     """
