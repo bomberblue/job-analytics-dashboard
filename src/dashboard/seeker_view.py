@@ -14,7 +14,6 @@ from src.dashboard.utils import (
     create_metric_columns,
 )
 from src.pipeline.feature_enrichment import derive_ssoc_job_label
-from src.dashboard.theme import PAY_COLOR
 
 
 def _db_mod_time(db):
@@ -450,24 +449,27 @@ def render_seeker_view():
 
     st.subheader("Seniority Ladder")
     if not ladder_df.empty:
-        ladder_df['position_level'] = make_unique_categorical(ladder_df['position_level'])
-        ladder_df = ladder_df.head(6)
-        st.bar_chart(
-            ladder_df.set_index('position_level')['median_salary'],
-            color=PAY_COLOR,
-            width='stretch'
+        ladder_df = (
+            ladder_df
+            .assign(position_level=make_unique_categorical(ladder_df['position_level']))
+            .sort_values('median_salary', ascending=False)
+            .head(8)
+            .assign(median_salary=lambda df: df['median_salary'].map(format_currency_2dp))
+            .rename(columns={'position_level': 'Position Level', 'median_salary': 'Median Salary'})
         )
+        st.table(ladder_df[['Position Level', 'Median Salary']])
 
     st.subheader("Pay Range Width by Industry & Level")
     if not pay_range_df.empty:
         chart_df = pay_range_df.copy().head(8)
         chart_df['industry_level'] = chart_df['sector'].astype(str) + " - " + chart_df['experience_level'].astype(str)
         chart_df['pay_range'] = pd.to_numeric(chart_df['pay_range'], errors='coerce')
-        st.bar_chart(
-            chart_df.set_index('industry_level')['pay_range'],
-            color=PAY_COLOR,
-            width='stretch'
+        chart_df = (
+            chart_df
+            .assign(pay_range=lambda df: df['pay_range'].map(format_currency_2dp))
+            .rename(columns={'industry_level': 'Industry / Level', 'pay_range': 'Pay Range'})
         )
+        st.table(chart_df[['Industry / Level', 'Pay Range']])
 
     st.subheader("Competition Per Opening")
     if not competition_df.empty:
@@ -509,11 +511,16 @@ def render_seeker_view():
         )
 
     # Competitive skills
-    st.subheader("High-Value Skills (Avg Salary)")
+    st.subheader("High-Value Skills (Median Salary)")
     if not metrics['competitive_skills'].empty:
-        skills_chart = metrics['competitive_skills'].head(6)
-        st.bar_chart(
-            skills_chart.set_index('skill')['avg_salary'],
-            color=PAY_COLOR,
-            width='stretch'
+        skills_df = (
+            metrics['competitive_skills']
+            .head(10)
+            .assign(median_salary=lambda df: df['avg_salary'].map(format_currency_2dp))
+            .rename(columns={
+                'skill': 'Skill',
+                'opportunities': 'Opportunities',
+                'median_salary': 'Median Salary ($)'
+            })
         )
+        st.table(skills_df[['Skill', 'Opportunities', 'Median Salary ($)']])
