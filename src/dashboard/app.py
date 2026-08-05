@@ -113,7 +113,7 @@ def render_nav():
         for col, (view, label) in zip(cols, NAV_CHIPS):
             with col:
                 st.button(
-                    label, key=f"nav_chip_{view}", use_container_width=True,
+                    label, key=f"nav_chip_{view}", width='stretch',
                     on_click=_select_view, args=(view,),
                     disabled=(view == st.session_state.view_mode),
                 )

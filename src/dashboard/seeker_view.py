@@ -267,7 +267,7 @@ def render_seeker_view():
         st.line_chart(
             experience_years_df.set_index('seniority_years')['median_salary'],
             color=PAY_COLOR,
-            use_container_width=True
+            width='stretch'
         )
 
     st.subheader("Seniority Ladder")
@@ -276,7 +276,7 @@ def render_seeker_view():
         st.bar_chart(
             ladder_df.set_index('position_level')['median_salary'],
             color=PAY_COLOR,
-            use_container_width=True
+            width='stretch'
         )
 
     st.subheader("Pay Range Width by Industry & Level")
@@ -287,7 +287,7 @@ def render_seeker_view():
         st.bar_chart(
             chart_df.set_index('industry_level')['pay_range'],
             color=PAY_COLOR,
-            use_container_width=True
+            width='stretch'
         )
 
     st.subheader("Competition Per Opening")
@@ -302,7 +302,7 @@ def render_seeker_view():
         })
         st.dataframe(
             competition_df[['Role', 'Competition Type', 'Postings', 'Competition / Opening', 'Median Salary ($)']],
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
 
@@ -316,7 +316,7 @@ def render_seeker_view():
                 'avg_salary': 'Avg Salary ($)',
                 'num_companies': 'Companies'
             }),
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
 
@@ -331,7 +331,7 @@ def render_seeker_view():
                 'median_max': 'Market Rate ($)',
                 'p90': 'Top 10% ($)'
             }),
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
 
@@ -342,5 +342,5 @@ def render_seeker_view():
         st.bar_chart(
             skills_chart.set_index('skill')['avg_salary'],
             color=PAY_COLOR,
-            use_container_width=True
+            width='stretch'
         )
