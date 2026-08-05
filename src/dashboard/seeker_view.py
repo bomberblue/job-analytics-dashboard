@@ -39,11 +39,9 @@ def _cached_sector_list(db_path, db_mod_time):
     return df['sector'].tolist()
 
 
-@st.cache_data(show_spinner='Loading seeker dataset…')
-def _cached_seeker_dataset(db_path, db_mod_time, industry=None, experience_level=None):
-    where = build_where_clause(sector=industry, experience_level=experience_level)
-
-    sql = f"""
+@st.cache_data(show_spinner='Loading raw seeker dataset…')
+def _cached_raw_seeker_dataset(db_path, db_mod_time):
+    sql = """
         SELECT
             title,
             company,
@@ -56,13 +54,31 @@ def _cached_seeker_dataset(db_path, db_mod_time, industry=None, experience_level
             vacancies,
             skills
         FROM jobs
-        {where}
+        WHERE posting_date IS NOT NULL
+          AND salary_min IS NOT NULL
+          AND salary_max IS NOT NULL
+          AND salary_min >= 500
+          AND salary_max <= 100000
+          AND (seniority_years IS NULL OR seniority_years <= 30)
     """
     df = _cached_query(db_path, db_mod_time, sql)
     if not df.empty:
         df = df.copy()
         df['market_salary'] = (df['salary_min'] + df['salary_max']) / 2.0
     return df
+
+
+@st.cache_data(show_spinner='Loading seeker dataset…')
+def _cached_seeker_dataset(db_path, db_mod_time, industry=None, experience_level=None):
+    seeker_df = _cached_raw_seeker_dataset(db_path, db_mod_time)
+    if seeker_df.empty:
+        return seeker_df
+
+    if industry:
+        seeker_df = seeker_df[seeker_df['sector'] == industry]
+    if experience_level:
+        seeker_df = seeker_df[seeker_df['experience_level'] == experience_level]
+    return seeker_df
 
 
 @st.cache_data(show_spinner='Loading seeker metrics…')
