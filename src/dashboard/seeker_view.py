@@ -139,6 +139,24 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
     return metrics
 
 
+@st.cache_data(show_spinner='Loading seeker view bundle…')
+def _cached_seeker_view_bundle(db_path, db_mod_time, experience_level, industry, salary_input):
+    metrics = _cached_seeker_metrics(db_path, db_mod_time, experience_level, industry)
+    percentile_df = _fetch_salary_percentile(db_path, db_mod_time, industry, experience_level, salary_input)
+    experience_years_df = _fetch_pay_by_experience_years(db_path, db_mod_time, industry)
+    ladder_df = _fetch_seniority_ladder(db_path, db_mod_time, industry)
+    pay_range_df = _fetch_pay_range_by_industry_level(db_path, db_mod_time, industry, limit=10)
+    competition_df = _fetch_competition_metrics(db_path, db_mod_time, industry, experience_level, limit=10)
+    return {
+        'metrics': metrics,
+        'percentile_df': percentile_df,
+        'experience_years_df': experience_years_df,
+        'ladder_df': ladder_df,
+        'pay_range_df': pay_range_df,
+        'competition_df': competition_df,
+    }
+
+
 def build_where_clause(sector=None, experience_level=None, seniority_years=None):
     """Build a composable SQL WHERE clause for seeker analytics.
 
@@ -344,27 +362,19 @@ def render_seeker_view():
     with col4:
         st.write("")  # Spacing
 
-    metrics = _cached_seeker_metrics(
+    bundle = _cached_seeker_view_bundle(
         st.session_state.db.db_path,
         _db_mod_time(st.session_state.db),
         exp,
         industry,
+        salary_input,
     )
-    percentile_df = fetch_salary_percentile(
-        st.session_state.db,
-        industry=industry,
-        experience_level=exp,
-        salary=salary_input,
-    )
-    experience_years_df = fetch_pay_by_experience_years(st.session_state.db, industry=industry)
-    ladder_df = fetch_seniority_ladder(st.session_state.db, industry=industry)
-    pay_range_df = fetch_pay_range_by_industry_level(st.session_state.db, industry=industry, limit=10)
-    competition_df = fetch_competition_metrics(
-        st.session_state.db,
-        industry=industry,
-        experience_level=exp,
-        limit=10,
-    )
+    metrics = bundle['metrics']
+    percentile_df = bundle['percentile_df']
+    experience_years_df = bundle['experience_years_df']
+    ladder_df = bundle['ladder_df']
+    pay_range_df = bundle['pay_range_df']
+    competition_df = bundle['competition_df']
 
     if not metrics['top_roles'].empty:
         metrics['top_roles']['job_label'] = metrics['top_roles']['title'].apply(
