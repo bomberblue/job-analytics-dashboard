@@ -4,6 +4,7 @@ Job seeker's dashboard view.
 from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 from src.dashboard.utils import (
@@ -39,12 +40,103 @@ def _cached_sector_list(db_path, db_mod_time):
     return df['sector'].tolist()
 
 
-@st.cache_data(show_spinner='Loading seeker metrics…')
-def _cached_seeker_view(db_path, db_mod_time, experience_level, sector):
-    from src.database.database_manager import DatabaseManager
+@st.cache_data(show_spinner='Loading seeker dataset…')
+def _cached_seeker_dataset(db_path, db_mod_time, industry=None):
+    where = (
+        "posting_date IS NOT NULL AND salary_min IS NOT NULL "
+        "AND salary_max IS NOT NULL AND salary_min >= 500 "
+        "AND salary_max <= 100000 AND (seniority_years IS NULL OR seniority_years <= 30)"
+    )
+    if industry:
+        where += f" AND sector = '{industry}'"
 
-    db = DatabaseManager()
-    return db.get_seeker_view(experience_level=experience_level, sector=sector)
+    sql = f"""
+        SELECT
+            title,
+            company,
+            sector,
+            experience_level,
+            seniority_years,
+            position_level,
+            salary_min,
+            salary_max,
+            vacancies,
+            skills
+        FROM jobs
+        WHERE {where}
+    """
+    df = _cached_query(db_path, db_mod_time, sql)
+    if not df.empty:
+        df = df.copy()
+        df['market_salary'] = (df['salary_min'] + df['salary_max']) / 2.0
+    return df
+
+
+@st.cache_data(show_spinner='Loading seeker metrics…')
+def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, sector)
+    if experience_level:
+        seeker_df = seeker_df[seeker_df['experience_level'] == experience_level]
+
+    metrics = {
+        'opportunities': pd.DataFrame([{
+            'total_opportunities': len(seeker_df),
+            'sectors_hiring': int(seeker_df['sector'].nunique(dropna=True)),
+            'median_salary': round(seeker_df['market_salary'].median()) if not seeker_df.empty else float('nan'),
+            'top_salary': int(seeker_df['salary_max'].max()) if not seeker_df.empty else float('nan'),
+        }]),
+        'top_roles': pd.DataFrame(columns=['title', 'opportunities', 'avg_salary', 'min_salary', 'num_companies']),
+        'salary_benchmarks': pd.DataFrame(columns=['title', 'experience_level', 'p25', 'median_entry', 'median_max', 'p90', 'count_samples']),
+        'competitive_skills': pd.DataFrame(columns=['skill', 'opportunities', 'avg_salary']),
+    }
+
+    if not seeker_df.empty:
+        metrics['top_roles'] = (
+            seeker_df
+            .groupby('title', observed=True, as_index=False)
+            .agg(
+                opportunities=('title', 'size'),
+                avg_salary=('market_salary', 'mean'),
+                min_salary=('salary_min', 'min'),
+                num_companies=('company', 'nunique')
+            )
+            .sort_values('opportunities', ascending=False)
+            .head(10)
+        )
+
+        metrics['salary_benchmarks'] = (
+            seeker_df
+            .groupby(['title', 'experience_level'], observed=True, as_index=False)
+            .agg(
+                p25=('market_salary', lambda s: round(s.quantile(.25), 0)),
+                median_entry=('salary_min', 'mean'),
+                median_max=('salary_max', 'mean'),
+                p90=('salary_max', 'max'),
+                count_samples=('title', 'size')
+            )
+            .sort_values('median_max', ascending=False)
+        )
+
+        skills_df = seeker_df[['skills', 'salary_min', 'salary_max']].copy()
+        skills_df = skills_df.assign(skill=skills_df['skills'].fillna('').str.split(','))
+        skills_df = skills_df.explode('skill').reset_index(drop=True)
+        skills_df['skill'] = skills_df['skill'].astype('string').str.strip()
+        skills_df = skills_df[skills_df['skill'].replace('', pd.NA).notna()]
+        skills_df = skills_df[skills_df['skill'] != 'Not Specified']
+        if not skills_df.empty:
+            skills_df['avg_salary'] = (skills_df['salary_min'] + skills_df['salary_max']) / 2.0
+            metrics['competitive_skills'] = (
+                skills_df
+                .groupby('skill', observed=True, as_index=False)
+                .agg(
+                    opportunities=('skill', 'size'),
+                    avg_salary=('avg_salary', 'mean')
+                )
+                .query('opportunities > 10')
+                .sort_values('avg_salary', ascending=False)
+                .head(15)
+            )
+    return metrics
 
 
 def build_where_clause(sector=None, experience_level=None, seniority_years=None):
@@ -73,23 +165,21 @@ def build_where_clause(sector=None, experience_level=None, seniority_years=None)
 
 @st.cache_data(show_spinner='Loading salary percentile…')
 def _fetch_salary_percentile(db_path, db_mod_time, industry=None, experience_level=None, salary=None):
-    where = build_where_clause(sector=industry, experience_level=experience_level)
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
+    if experience_level:
+        seeker_df = seeker_df[seeker_df['experience_level'] == experience_level]
     if salary is None:
         salary = 0
-    sql = f"""
-        WITH ranked AS (
-            SELECT
-                (salary_min + salary_max) / 2.0 AS market_salary
-            FROM jobs
-            {where}
-        )
-        SELECT
-            ROUND(100 * (1 - (SELECT COUNT(*) FROM ranked WHERE market_salary < {float(salary)}) / NULLIF((SELECT COUNT(*) FROM ranked), 0)), 1) AS percentile,
-            (SELECT COUNT(*) FROM ranked) AS comparable_postings
-        FROM ranked
-        LIMIT 1
-    """
-    return _cached_query(db_path, db_mod_time, sql)
+    if seeker_df.empty:
+        return pd.DataFrame([{'percentile': float('nan'), 'comparable_postings': 0}])
+
+    total = len(seeker_df)
+    lower_count = int((seeker_df['market_salary'] < float(salary)).sum())
+    percentile = round(100 * (1 - lower_count / total), 1)
+    return pd.DataFrame([{
+        'percentile': percentile,
+        'comparable_postings': int(total),
+    }])
 
 
 def fetch_salary_percentile(db, industry=None, experience_level=None, salary=None):
@@ -99,18 +189,20 @@ def fetch_salary_percentile(db, industry=None, experience_level=None, salary=Non
 
 @st.cache_data(show_spinner='Loading pay-by-experience data…')
 def _fetch_pay_by_experience_years(db_path, db_mod_time, industry=None):
-    where = build_where_clause(sector=industry)
-    sql = f"""
-        SELECT
-            seniority_years,
-            ROUND(MEDIAN((salary_min + salary_max) / 2.0)) AS median_salary
-        FROM jobs
-        {where}
-        AND seniority_years IS NOT NULL
-        GROUP BY seniority_years
-        ORDER BY seniority_years
-    """
-    return _cached_query(db_path, db_mod_time, sql)
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
+    seeker_df = seeker_df.dropna(subset=['seniority_years'])
+    if seeker_df.empty:
+        return pd.DataFrame(columns=['seniority_years', 'median_salary'])
+
+    result = (
+        seeker_df
+        .groupby('seniority_years', observed=True, as_index=False)['market_salary']
+        .median()
+        .rename(columns={'market_salary': 'median_salary'})
+        .round(0)
+        .sort_values('seniority_years')
+    )
+    return result
 
 
 def fetch_pay_by_experience_years(db, industry=None):
@@ -120,17 +212,20 @@ def fetch_pay_by_experience_years(db, industry=None):
 
 @st.cache_data(show_spinner='Loading seniority ladder…')
 def _fetch_seniority_ladder(db_path, db_mod_time, industry=None):
-    where = build_where_clause(sector=industry)
-    sql = f"""
-        SELECT
-            COALESCE(position_level, 'Unspecified') AS position_level,
-            ROUND(MEDIAN((salary_min + salary_max) / 2.0)) AS median_salary
-        FROM jobs
-        {where}
-        GROUP BY position_level
-        ORDER BY median_salary DESC
-    """
-    return _cached_query(db_path, db_mod_time, sql)
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
+    if seeker_df.empty:
+        return pd.DataFrame(columns=['position_level', 'median_salary'])
+
+    seeker_df['position_level'] = seeker_df['position_level'].fillna('Unspecified')
+    result = (
+        seeker_df
+        .groupby('position_level', observed=True, as_index=False)['market_salary']
+        .median()
+        .rename(columns={'market_salary': 'median_salary'})
+        .round(0)
+        .sort_values('median_salary', ascending=False)
+    )
+    return result
 
 
 def fetch_seniority_ladder(db, industry=None):
@@ -140,23 +235,19 @@ def fetch_seniority_ladder(db, industry=None):
 
 @st.cache_data(show_spinner='Loading pay-range data…')
 def _fetch_pay_range_by_industry_level(db_path, db_mod_time, industry=None, limit=10):
-    where = build_where_clause(sector=industry)
-    sql = f"""
-        SELECT
-            sector,
-            experience_level,
-            ROUND(
-                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY (salary_min + salary_max) / 2.0)
-                - PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY (salary_min + salary_max) / 2.0)
-            ) AS pay_range
-        FROM jobs
-        {where}
-        AND sector IS NOT NULL AND experience_level IS NOT NULL
-        GROUP BY sector, experience_level
-        ORDER BY pay_range DESC
-        LIMIT {int(limit)}
-    """
-    return _cached_query(db_path, db_mod_time, sql)
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
+    seeker_df = seeker_df.dropna(subset=['sector', 'experience_level'])
+    if seeker_df.empty:
+        return pd.DataFrame(columns=['sector', 'experience_level', 'pay_range'])
+
+    result = (
+        seeker_df
+        .groupby(['sector', 'experience_level'], observed=True, as_index=False)
+        .agg(pay_range=('market_salary', lambda s: np.round(s.quantile(0.9) - s.quantile(0.1), 0)))
+        .sort_values('pay_range', ascending=False)
+        .head(int(limit))
+    )
+    return result
 
 
 def fetch_pay_range_by_industry_level(db, industry=None, limit=10):
@@ -166,37 +257,43 @@ def fetch_pay_range_by_industry_level(db, industry=None, limit=10):
 
 @st.cache_data(show_spinner='Loading competition metrics…')
 def _fetch_competition_metrics(db_path, db_mod_time, industry=None, experience_level=None, limit=10):
-    where = build_where_clause(sector=industry, experience_level=experience_level)
-    sql = f"""
-        SELECT
-            title,
-            COUNT(*) AS postings,
-            ROUND(COUNT(*) / NULLIF(SUM(vacancies), 0), 2) AS competition_ratio,
-            ROUND(MEDIAN((salary_min + salary_max) / 2.0)) AS median_salary
-        FROM jobs
-        {where}
-        GROUP BY title
-    """
-    df = _cached_query(db_path, db_mod_time, sql)
-    if not df.empty:
-        df['job_label'] = df['title'].apply(_cached_label_for_title)
-        df = (
-            df
-            .groupby('job_label', observed=True, as_index=False)
-            .agg(
-                job_label=('job_label', 'first'),
-                postings=('postings', 'sum'),
-                competition_ratio=('competition_ratio', 'mean'),
-                median_salary=('median_salary', 'mean')
-            )
+    seeker_df = _cached_seeker_dataset(db_path, db_mod_time, industry)
+    if experience_level:
+        seeker_df = seeker_df[seeker_df['experience_level'] == experience_level]
+    if seeker_df.empty:
+        return pd.DataFrame(columns=['job_label', 'postings', 'competition_ratio', 'median_salary', 'competition_type'])
+
+    title_metrics = (
+        seeker_df
+        .groupby('title', observed=True, as_index=False)
+        .agg(
+            postings=('title', 'size'),
+            vacancies=('vacancies', 'sum'),
+            median_salary=('market_salary', 'median')
         )
-        top_n = int(limit / 2) + (limit % 2)
-        high = df.sort_values(['competition_ratio', 'postings'], ascending=[False, False]).head(top_n).copy()
-        low = df.sort_values(['competition_ratio', 'postings'], ascending=[True, False]).head(int(limit / 2)).copy()
-        high['competition_type'] = 'High'
-        low['competition_type'] = 'Low'
-        df = pd.concat([high, low], ignore_index=True)
-        df = df.sort_values(['competition_type', 'competition_ratio', 'postings'], ascending=[False, False, False])
+    )
+    title_metrics['competition_ratio'] = np.where(
+        title_metrics['vacancies'] == 0,
+        np.nan,
+        title_metrics['postings'] / title_metrics['vacancies'],
+    )
+    title_metrics['job_label'] = title_metrics['title'].apply(_cached_label_for_title)
+    df = (
+        title_metrics
+        .groupby('job_label', observed=True, as_index=False)
+        .agg(
+            postings=('postings', 'sum'),
+            competition_ratio=('competition_ratio', 'mean'),
+            median_salary=('median_salary', 'mean')
+        )
+    )
+    top_n = int(limit / 2) + (limit % 2)
+    high = df.sort_values(['competition_ratio', 'postings'], ascending=[False, False]).head(top_n).copy()
+    low = df.sort_values(['competition_ratio', 'postings'], ascending=[True, False]).head(int(limit / 2)).copy()
+    high['competition_type'] = 'High'
+    low['competition_type'] = 'Low'
+    df = pd.concat([high, low], ignore_index=True)
+    df = df.sort_values(['competition_type', 'competition_ratio', 'postings'], ascending=[False, False, False])
     return df
 
 
@@ -247,7 +344,7 @@ def render_seeker_view():
     with col4:
         st.write("")  # Spacing
 
-    metrics = _cached_seeker_view(
+    metrics = _cached_seeker_metrics(
         st.session_state.db.db_path,
         _db_mod_time(st.session_state.db),
         exp,
