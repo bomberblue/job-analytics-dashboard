@@ -1,6 +1,9 @@
 """
 Job seeker's dashboard view.
 """
+from functools import lru_cache
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 from src.dashboard.utils import (
@@ -10,6 +13,37 @@ from src.dashboard.utils import (
     create_metric_columns,
 )
 from src.pipeline.feature_enrichment import derive_ssoc_job_label
+
+
+def _db_mod_time(db):
+    """Return the last modified time of the database file for cache invalidation."""
+    return Path(db.db_path).stat().st_mtime
+
+
+@st.cache_data(show_spinner='Loading seeker dashboard query…')
+def _cached_query(db_path, db_mod_time, sql):
+    import duckdb
+
+    conn = duckdb.connect(db_path, read_only=True)
+    try:
+        return conn.execute(sql).df()
+    finally:
+        conn.close()
+
+
+@st.cache_data(show_spinner='Loading sector list…')
+def _cached_sector_list(db_path, db_mod_time):
+    sql = "SELECT DISTINCT sector FROM jobs WHERE sector IS NOT NULL ORDER BY sector"
+    df = _cached_query(db_path, db_mod_time, sql)
+    return df['sector'].tolist()
+
+
+@st.cache_data(show_spinner='Loading seeker metrics…')
+def _cached_seeker_view(db_path, db_mod_time, experience_level, sector):
+    from src.database.database_manager import DatabaseManager
+
+    db = DatabaseManager()
+    return db.get_seeker_view(experience_level=experience_level, sector=sector)
 
 
 def build_where_clause(sector=None, experience_level=None, seniority_years=None):
@@ -36,8 +70,8 @@ def build_where_clause(sector=None, experience_level=None, seniority_years=None)
     return "WHERE " + " AND ".join(conditions)
 
 
-def fetch_salary_percentile(db, industry=None, experience_level=None, salary=None):
-    """Return the percentile and comparable posting count for a salary input."""
+@st.cache_data(show_spinner='Loading salary percentile…')
+def _fetch_salary_percentile(db_path, db_mod_time, industry=None, experience_level=None, salary=None):
     where = build_where_clause(sector=industry, experience_level=experience_level)
     if salary is None:
         salary = 0
@@ -54,11 +88,16 @@ def fetch_salary_percentile(db, industry=None, experience_level=None, salary=Non
         FROM ranked
         LIMIT 1
     """
-    return db.query(sql)
+    return _cached_query(db_path, db_mod_time, sql)
 
 
-def fetch_pay_by_experience_years(db, industry=None):
-    """Return median pay by required years of experience."""
+def fetch_salary_percentile(db, industry=None, experience_level=None, salary=None):
+    """Return the percentile and comparable posting count for a salary input."""
+    return _fetch_salary_percentile(db.db_path, _db_mod_time(db), industry, experience_level, salary)
+
+
+@st.cache_data(show_spinner='Loading pay-by-experience data…')
+def _fetch_pay_by_experience_years(db_path, db_mod_time, industry=None):
     where = build_where_clause(sector=industry)
     sql = f"""
         SELECT
@@ -70,11 +109,16 @@ def fetch_pay_by_experience_years(db, industry=None):
         GROUP BY seniority_years
         ORDER BY seniority_years
     """
-    return db.query(sql)
+    return _cached_query(db_path, db_mod_time, sql)
 
 
-def fetch_seniority_ladder(db, industry=None):
-    """Return median pay by the experience ladder for a chosen industry."""
+def fetch_pay_by_experience_years(db, industry=None):
+    """Return median pay by required years of experience."""
+    return _fetch_pay_by_experience_years(db.db_path, _db_mod_time(db), industry)
+
+
+@st.cache_data(show_spinner='Loading seniority ladder…')
+def _fetch_seniority_ladder(db_path, db_mod_time, industry=None):
     where = build_where_clause(sector=industry)
     sql = f"""
         SELECT
@@ -85,11 +129,16 @@ def fetch_seniority_ladder(db, industry=None):
         GROUP BY position_level
         ORDER BY median_salary DESC
     """
-    return db.query(sql)
+    return _cached_query(db_path, db_mod_time, sql)
 
 
-def fetch_pay_range_by_industry_level(db, industry=None, limit=10):
-    """Return pay range width by sector and experience level."""
+def fetch_seniority_ladder(db, industry=None):
+    """Return median pay by the experience ladder for a chosen industry."""
+    return _fetch_seniority_ladder(db.db_path, _db_mod_time(db), industry)
+
+
+@st.cache_data(show_spinner='Loading pay-range data…')
+def _fetch_pay_range_by_industry_level(db_path, db_mod_time, industry=None, limit=10):
     where = build_where_clause(sector=industry)
     sql = f"""
         SELECT
@@ -106,11 +155,16 @@ def fetch_pay_range_by_industry_level(db, industry=None, limit=10):
         ORDER BY pay_range DESC
         LIMIT {int(limit)}
     """
-    return db.query(sql)
+    return _cached_query(db_path, db_mod_time, sql)
 
 
-def fetch_competition_metrics(db, industry=None, experience_level=None, limit=10):
-    """Return competition per opening for the selected filters."""
+def fetch_pay_range_by_industry_level(db, industry=None, limit=10):
+    """Return pay range width by sector and experience level."""
+    return _fetch_pay_range_by_industry_level(db.db_path, _db_mod_time(db), industry, limit)
+
+
+@st.cache_data(show_spinner='Loading competition metrics…')
+def _fetch_competition_metrics(db_path, db_mod_time, industry=None, experience_level=None, limit=10):
     where = build_where_clause(sector=industry, experience_level=experience_level)
     sql = f"""
         SELECT
@@ -122,9 +176,9 @@ def fetch_competition_metrics(db, industry=None, experience_level=None, limit=10
         {where}
         GROUP BY title
     """
-    df = db.query(sql)
+    df = _cached_query(db_path, db_mod_time, sql)
     if not df.empty:
-        df['job_label'] = df['title'].apply(lambda t: derive_ssoc_job_label(t, None, None))
+        df['job_label'] = df['title'].apply(_cached_label_for_title)
         df = (
             df
             .groupby('job_label', observed=True, as_index=False)
@@ -145,6 +199,16 @@ def fetch_competition_metrics(db, industry=None, experience_level=None, limit=10
     return df
 
 
+@lru_cache(maxsize=128)
+def _cached_label_for_title(title: str):
+    return derive_ssoc_job_label(title, None, None)
+
+
+def fetch_competition_metrics(db, industry=None, experience_level=None, limit=10):
+    """Return competition per opening for the selected filters."""
+    return _fetch_competition_metrics(db.db_path, _db_mod_time(db), industry, experience_level, limit)
+
+
 def make_unique_categorical(values, ordered=True):
     """Create a categorical series from values while avoiding duplicate category labels."""
     cleaned = pd.Series(values).astype('string').fillna('Unknown')
@@ -161,7 +225,7 @@ def render_seeker_view():
     with col1:
         industry = filter_selectbox(
             "Industry:",
-            st.session_state.db.get_sector_list(),
+            _cached_sector_list(st.session_state.db.db_path, _db_mod_time(st.session_state.db)),
             "All Industries",
             key="seeker_industry"
         )
@@ -183,16 +247,31 @@ def render_seeker_view():
     with col4:
         st.write("")  # Spacing
 
-    metrics = st.session_state.db.get_seeker_view(experience_level=exp, sector=industry)
-    percentile_df = fetch_salary_percentile(st.session_state.db, industry=industry, experience_level=exp, salary=salary_input)
+    metrics = _cached_seeker_view(
+        st.session_state.db.db_path,
+        _db_mod_time(st.session_state.db),
+        exp,
+        industry,
+    )
+    percentile_df = fetch_salary_percentile(
+        st.session_state.db,
+        industry=industry,
+        experience_level=exp,
+        salary=salary_input,
+    )
     experience_years_df = fetch_pay_by_experience_years(st.session_state.db, industry=industry)
     ladder_df = fetch_seniority_ladder(st.session_state.db, industry=industry)
     pay_range_df = fetch_pay_range_by_industry_level(st.session_state.db, industry=industry, limit=10)
-    competition_df = fetch_competition_metrics(st.session_state.db, industry=industry, experience_level=exp, limit=10)
+    competition_df = fetch_competition_metrics(
+        st.session_state.db,
+        industry=industry,
+        experience_level=exp,
+        limit=10,
+    )
 
     if not metrics['top_roles'].empty:
         metrics['top_roles']['job_label'] = metrics['top_roles']['title'].apply(
-            lambda t: derive_ssoc_job_label(t, None, None)
+            _cached_label_for_title
         )
         metrics['top_roles'] = (
             metrics['top_roles']
@@ -208,7 +287,7 @@ def render_seeker_view():
 
     if not metrics['salary_benchmarks'].empty:
         metrics['salary_benchmarks']['job_label'] = metrics['salary_benchmarks']['title'].apply(
-            lambda t: derive_ssoc_job_label(t, None, None)
+            _cached_label_for_title
         )
         metrics['salary_benchmarks'] = (
             metrics['salary_benchmarks']
