@@ -13,6 +13,7 @@ from src.dashboard.utils import (
     create_metric_columns,
 )
 from src.pipeline.feature_enrichment import derive_ssoc_job_label
+from src.dashboard.theme import PAY_COLOR
 
 
 def _db_mod_time(db):
@@ -217,9 +218,8 @@ def make_unique_categorical(values, ordered=True):
 
 
 def render_seeker_view():
-    """Render job seeker-focused dashboard with fairness and opportunity insights."""
-    st.header("🔍 Job Seeker's Dashboard")
-
+    """Render job seeker-focused dashboard with fairness and opportunity insights.
+    No header - the nav chip above already names the board."""
     col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
     with col1:
@@ -345,7 +345,8 @@ def render_seeker_view():
     if not experience_years_df.empty:
         st.line_chart(
             experience_years_df.set_index('seniority_years')['median_salary'],
-            use_container_width=True
+            color=PAY_COLOR,
+            width='stretch'
         )
 
     st.subheader("Seniority Ladder")
@@ -353,7 +354,8 @@ def render_seeker_view():
         ladder_df['position_level'] = make_unique_categorical(ladder_df['position_level'])
         st.bar_chart(
             ladder_df.set_index('position_level')['median_salary'],
-            use_container_width=True
+            color=PAY_COLOR,
+            width='stretch'
         )
 
     st.subheader("Pay Range Width by Industry & Level")
@@ -363,7 +365,8 @@ def render_seeker_view():
         chart_df['pay_range'] = pd.to_numeric(chart_df['pay_range'], errors='coerce')
         st.bar_chart(
             chart_df.set_index('industry_level')['pay_range'],
-            use_container_width=True
+            color=PAY_COLOR,
+            width='stretch'
         )
 
     st.subheader("Competition Per Opening")
@@ -378,7 +381,7 @@ def render_seeker_view():
         })
         st.dataframe(
             competition_df[['Role', 'Competition Type', 'Postings', 'Competition / Opening', 'Median Salary ($)']],
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
 
@@ -392,7 +395,7 @@ def render_seeker_view():
                 'avg_salary': 'Avg Salary ($)',
                 'num_companies': 'Companies'
             }),
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
 
@@ -407,7 +410,7 @@ def render_seeker_view():
                 'median_max': 'Market Rate ($)',
                 'p90': 'Top 10% ($)'
             }),
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
 
@@ -417,5 +420,6 @@ def render_seeker_view():
         skills_chart = metrics['competitive_skills'].head(10)
         st.bar_chart(
             skills_chart.set_index('skill')['avg_salary'],
-            use_container_width=True
+            color=PAY_COLOR,
+            width='stretch'
         )

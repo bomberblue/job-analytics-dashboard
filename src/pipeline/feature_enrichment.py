@@ -113,6 +113,7 @@ JOBS_SCHEMA_COLUMNS = [
     'seniority_years', 'position_level', 'job_type', 'posting_date',
     'expiry_date', 'views', 'applications', 'vacancies', 'repost_count',
     'skills',
+    'dup_group_id', 'salary_midpoint', 'salary_flag', 'listing_days', 'is_repost',
 ]
 
 

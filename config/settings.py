@@ -47,3 +47,10 @@ STREAMLIT_CONFIG = {
 # Hirer vs Seeker view filters
 HIRER_METRICS = ["top_skills_demand", "role_trends", "hiring_pace", "salary_benchmarks"]
 SEEKER_METRICS = ["market_opportunities", "skill_premiums", "role_competitiveness", "salary_trends"]
+
+# Views/applications counters are only reliable before this date - a platform-side
+# counter freeze drops average views per posting by roughly 20x almost overnight at
+# this boundary (confirmed against this dataset: ~70 avg views per posting in June
+# 2023 vs ~5 in July). Shared by hirer_data_loader.py (counters_complete) and
+# market_overview.py (leverage/competition measures); pay itself is unaffected.
+ENGAGEMENT_COUNTER_FREEZE_DATE = '2023-07-01'

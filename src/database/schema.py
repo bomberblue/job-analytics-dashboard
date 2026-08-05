@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     skills TEXT,  -- comma-separated skills
     description TEXT,
     requirements TEXT,
+    dup_group_id INTEGER,   -- same-day duplicate group; see data_cleaning.py
+    salary_midpoint FLOAT,
+    salary_flag VARCHAR,    -- 'ok', 'low_stipend', 'outlier', 'undisclosed'
+    listing_days SMALLINT,  -- expiry_date - posting_date
+    is_repost BOOLEAN,
     created_at TIMESTAMP DEFAULT current_timestamp
 )
 """
@@ -148,11 +153,10 @@ def initialize_database():
     conn.execute(RAW_JOBS_SCHEMA)
     conn.execute(RAW_JOBS_FLAT_SCHEMA)
     
-    # Create processed tables (denormalized for analytics).
-    # jobs is deliberately NOT dropped here. It is dropped and recreated in
-    # insert_jobs(), at the point where there is actual data to replace it with,
-    # so a failed extract or a --nrows test run can't wipe a good load.
+    # Recreate processed tables for a clean pipeline reload. Streamed chunks
+    # append to this new jobs table during the current run.
     print("📊 Creating processed/analytical tables...")
+    conn.execute("DROP TABLE IF EXISTS jobs")
     conn.execute(JOBS_SCHEMA)
     conn.execute(ROLE_STATISTICS_SCHEMA)
     conn.execute(SALARY_BENCHMARKS_SCHEMA)
