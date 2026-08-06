@@ -164,8 +164,13 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
         )
         metrics['salary_benchmarks'] = salary_benchmarks[valid_labels]
 
-        skills_df = seeker_df[['skills', 'salary_min', 'salary_max']].copy()
-        skills_df = skills_df.assign(skill=skills_df['skills'].fillna('').str.split(','))
+        # skills is the literal string "Not Specified" for ~97% of postings - drop those
+        # before the split/explode rather than after, so the expensive part only ever
+        # touches the rows that actually carry skill data.
+        skills_df = seeker_df[
+            seeker_df['skills'].notna() & (seeker_df['skills'] != 'Not Specified')
+        ][['skills', 'salary_min', 'salary_max']].copy()
+        skills_df = skills_df.assign(skill=skills_df['skills'].str.split(','))
         skills_df = skills_df.explode('skill').reset_index(drop=True)
         skills_df['skill'] = skills_df['skill'].astype('string').str.strip()
         skills_df = skills_df[skills_df['skill'].replace('', pd.NA).notna()]
