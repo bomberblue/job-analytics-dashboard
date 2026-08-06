@@ -48,6 +48,7 @@ at load time.  They are produced here anyway because the enriched frame is meant
 directly for analysis, not only as a database feed.
 """
 import re
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -212,6 +213,59 @@ def derive_ssoc_job_label(title, position_level, company):
             base_label = f"{normalized_position} {base_label}"
 
     return base_label
+
+
+# Mirrors the branches inside derive_supervisor_label, in the same priority order. Kept as a
+# separate list (rather than deriving from derive_supervisor_label) because that function's
+# if/elif chain isn't itself vectorizable -- this is the data it's built from, duplicated
+# once, not two independent sources of truth.
+_SUPERVISOR_SUB_PATTERNS = [
+    (r'\b(retail|shop|store|floor|boutique)\b', 'Retail Supervisor'),
+    (r'\b(restaurant|food and beverage|f&b|kitchen|cafe|bar|dining|hospitality|hotel)\b', 'F&B Supervisor'),
+    (r'\b(construction|site|civil|building|contractor|foreman|project site)\b', 'Construction Supervisor'),
+    (r'\b(security|operations|shift|officer|police|station)\b', 'Officer Supervisor'),
+]
+
+
+def derive_ssoc_job_labels_bulk(titles):
+    """Vectorized equivalent of ``derive_ssoc_job_label(title, None, None)`` for a whole Series.
+
+    Only covers the title-only case (position_level and company both None) -- that's the only
+    way the dashboard calls it, at cardinality (one call per distinct job title, up to ~380k)
+    where the per-title Python/regex version is too slow. With company_hint always empty, the
+    company-hint overrides and the position-level prefix in derive_ssoc_job_label never fire, so
+    this reproduces the rest of that function's branches with pandas' vectorized .str.contains
+    instead of a Python function call per row. Verified against derive_ssoc_job_label(title,
+    None, None) for every distinct title in the production dataset with zero mismatches.
+    """
+    title_text = titles.fillna('').astype(str).str.strip()
+    lookup = title_text.str.lower()
+
+    label = pd.Series(pd.NA, index=titles.index, dtype='object')
+
+    # The shared patterns use capture groups for readability (e.g. matching either word of a
+    # pair); str.contains only checks for a match, so the "did you mean str.extract" warning
+    # pandas raises for patterns with groups doesn't apply here.
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', UserWarning)
+
+        is_supervisor = lookup.str.contains('supervisor', regex=False)
+        remaining = is_supervisor.copy()
+        for pattern, sub_label in _SUPERVISOR_SUB_PATTERNS:
+            match = remaining & lookup.str.contains(pattern, regex=True)
+            label[match] = sub_label
+            remaining &= ~match
+        label[remaining] = 'Supervisor'
+
+        remaining = ~is_supervisor
+        for pattern, pat_label in SSOE_JOB_LABEL_PATTERNS:
+            match = remaining & lookup.str.contains(pattern, regex=True)
+            label[match] = pat_label
+            remaining &= ~match
+
+    fallback = title_text.where(title_text != '', 'Unknown').str.title()
+    label[remaining] = fallback[remaining]
+    return label
 
 
 def extract_skills_vectorised(text):

@@ -1,7 +1,6 @@
 """
 Job seeker's dashboard view.
 """
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +12,7 @@ from src.dashboard.utils import (
     filter_selectbox,
     create_metric_columns,
 )
-from src.pipeline.feature_enrichment import derive_ssoc_job_label
+from src.pipeline.feature_enrichment import derive_ssoc_job_labels_bulk
 
 
 def _db_mod_time(db):
@@ -68,6 +67,21 @@ def _cached_raw_seeker_dataset(db_path, db_mod_time):
     return df
 
 
+@st.cache_data(show_spinner='Loading job label lookup…')
+def _cached_job_label_map(db_path, db_mod_time):
+    """title -> job_label for every distinct title, computed once per db build.
+
+    job_label is a pure function of title, and derive_ssoc_job_labels_bulk is cheap per
+    distinct title (~360k) but every caller here works with an already title-deduplicated
+    frame (post-groupby) - so this returns a lookup dict for a cheap .map(), rather than a
+    column pre-populated on the full ~1M-row dataset, which would cost extra to broadcast
+    out to every row for no consumer that actually needs it at that grain.
+    """
+    sql = "SELECT DISTINCT title FROM jobs WHERE title IS NOT NULL"
+    titles = _cached_query(db_path, db_mod_time, sql)['title']
+    return dict(zip(titles, derive_ssoc_job_labels_bulk(titles)))
+
+
 @st.cache_data(show_spinner='Loading seeker dataset…')
 def _cached_seeker_dataset(db_path, db_mod_time, industry=None, experience_level=None):
     seeker_df = _cached_raw_seeker_dataset(db_path, db_mod_time)
@@ -101,6 +115,8 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
     }
 
     if not seeker_df.empty:
+        # top_roles only ever needs job_label for the 10 rows it ends up displaying, so the
+        # map is applied after the head(10) truncation rather than on the full title grouping.
         metrics['top_roles'] = (
             seeker_df
             .groupby('title', observed=True, as_index=False)
@@ -113,6 +129,8 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
             .sort_values('opportunities', ascending=False)
             .head(10)
         )
+        label_map = _cached_job_label_map(db_path, db_mod_time)
+        metrics['top_roles']['job_label'] = metrics['top_roles']['title'].map(label_map)
 
         grouped = seeker_df.groupby(['title', 'experience_level'], observed=True)
         salary_benchmarks = grouped.agg(
@@ -125,7 +143,7 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
         # per group and is unusably slow at title-level cardinality (~380k groups).
         salary_benchmarks['p25'] = grouped['market_salary'].quantile(.25).round(0)
         salary_benchmarks = salary_benchmarks.reset_index()
-        salary_benchmarks['job_label'] = salary_benchmarks['title'].apply(_cached_label_for_title)
+        salary_benchmarks['job_label'] = salary_benchmarks['title'].map(label_map)
         salary_benchmarks = (
             salary_benchmarks
             .groupby(['job_label', 'experience_level'], observed=True, as_index=False)
@@ -302,7 +320,8 @@ def _fetch_competition_metrics(db_path, db_mod_time, industry=None, experience_l
         np.nan,
         title_metrics['postings'] / title_metrics['vacancies'],
     )
-    title_metrics['job_label'] = title_metrics['title'].apply(_cached_label_for_title)
+    label_map = _cached_job_label_map(db_path, db_mod_time)
+    title_metrics['job_label'] = title_metrics['title'].map(label_map)
     df = (
         title_metrics
         .groupby('job_label', observed=True, as_index=False)
@@ -320,11 +339,6 @@ def _fetch_competition_metrics(db_path, db_mod_time, industry=None, experience_l
     df = pd.concat([high, low], ignore_index=True)
     df = df.sort_values(['competition_type', 'competition_ratio', 'postings'], ascending=[False, False, False])
     return df
-
-
-@lru_cache(maxsize=None)
-def _cached_label_for_title(title: str):
-    return derive_ssoc_job_label(title, None, None)
 
 
 def fetch_competition_metrics(db, industry=None, experience_level=None, limit=10):
@@ -404,9 +418,6 @@ def render_seeker_view():
     )
 
     if not metrics['top_roles'].empty:
-        metrics['top_roles']['job_label'] = metrics['top_roles']['title'].apply(
-            _cached_label_for_title
-        )
         metrics['top_roles'] = (
             metrics['top_roles']
             .groupby('job_label', observed=True, as_index=False)
