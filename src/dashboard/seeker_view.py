@@ -111,18 +111,38 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
             .head(10)
         )
 
-        metrics['salary_benchmarks'] = (
-            seeker_df
-            .groupby(['title', 'experience_level'], observed=True, as_index=False)
+        grouped = seeker_df.groupby(['title', 'experience_level'], observed=True)
+        salary_benchmarks = grouped.agg(
+            median_entry=('salary_min', 'mean'),
+            median_max=('salary_max', 'mean'),
+            p90=('salary_max', 'max'),
+            count_samples=('title', 'size')
+        )
+        # groupby.quantile() is vectorized; a lambda inside .agg() calls Python
+        # per group and is unusably slow at title-level cardinality (~380k groups).
+        salary_benchmarks['p25'] = grouped['market_salary'].quantile(.25).round(0)
+        salary_benchmarks = salary_benchmarks.reset_index()
+        salary_benchmarks['job_label'] = salary_benchmarks['title'].apply(_cached_label_for_title)
+        salary_benchmarks = (
+            salary_benchmarks
+            .groupby(['job_label', 'experience_level'], observed=True, as_index=False)
             .agg(
-                p25=('market_salary', lambda s: round(s.quantile(.25), 0)),
-                median_entry=('salary_min', 'mean'),
-                median_max=('salary_max', 'mean'),
-                p90=('salary_max', 'max'),
-                count_samples=('title', 'size')
+                experience_level=('experience_level', 'first'),
+                p25=('p25', 'mean'),
+                median_entry=('median_entry', 'mean'),
+                median_max=('median_max', 'mean'),
+                p90=('p90', 'max'),
+                count_samples=('count_samples', 'sum')
             )
             .sort_values('median_max', ascending=False)
         )
+        valid_labels = (
+            salary_benchmarks
+            .groupby('job_label')['count_samples']
+            .transform('sum')
+            >= 200
+        )
+        metrics['salary_benchmarks'] = salary_benchmarks[valid_labels]
 
         skills_df = seeker_df[['skills', 'salary_min', 'salary_max']].copy()
         skills_df = skills_df.assign(skill=skills_df['skills'].fillna('').str.split(','))
@@ -300,7 +320,7 @@ def _fetch_competition_metrics(db_path, db_mod_time, industry=None, experience_l
     return df
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=None)
 def _cached_label_for_title(title: str):
     return derive_ssoc_job_label(title, None, None)
 
@@ -398,33 +418,11 @@ def render_seeker_view():
         metrics['top_roles']['avg_salary'] = metrics['top_roles']['avg_salary'].apply(format_currency_2dp)
 
     if not metrics['salary_benchmarks'].empty:
-        metrics['salary_benchmarks']['job_label'] = metrics['salary_benchmarks']['title'].apply(
-            _cached_label_for_title
-        )
-        metrics['salary_benchmarks'] = (
-            metrics['salary_benchmarks']
-            .groupby(['job_label', 'experience_level'], observed=True, as_index=False)
-            .agg(
-                experience_level=('experience_level', 'first'),
-                median_entry=('median_entry', 'mean'),
-                median_max=('median_max', 'mean'),
-                p90=('p90', 'max'),
-                count_samples=('count_samples', 'sum')
-            )
-            .sort_values('median_max', ascending=False)
-        )
         # Some pandas builds may not expose DataFrame.applymap; use a
         # column-wise mapping which is more portable across pandas versions.
-        for col in ['median_entry', 'median_max', 'p90']:
+        for col in ['p25', 'median_entry', 'median_max', 'p90']:
             if col in metrics['salary_benchmarks'].columns:
                 metrics['salary_benchmarks'][col] = metrics['salary_benchmarks'][col].map(format_currency_2dp)
-        valid_labels = (
-            metrics['salary_benchmarks']
-            .groupby('job_label')['count_samples']
-            .transform('sum')
-            >= 200
-        )
-        metrics['salary_benchmarks'] = metrics['salary_benchmarks'][valid_labels]
 
     # Opportunities overview
     if not metrics['opportunities'].empty:
