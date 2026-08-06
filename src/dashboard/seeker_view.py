@@ -1,7 +1,6 @@
 """
 Job seeker's dashboard view.
 """
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +12,7 @@ from src.dashboard.utils import (
     filter_selectbox,
     create_metric_columns,
 )
-from src.pipeline.feature_enrichment import derive_ssoc_job_label
+from src.pipeline.feature_enrichment import derive_ssoc_job_labels_bulk
 
 
 def _db_mod_time(db):
@@ -68,6 +67,21 @@ def _cached_raw_seeker_dataset(db_path, db_mod_time):
     return df
 
 
+@st.cache_data(show_spinner='Loading job label lookup…')
+def _cached_job_label_map(db_path, db_mod_time):
+    """title -> job_label for every distinct title, computed once per db build.
+
+    job_label is a pure function of title, and derive_ssoc_job_labels_bulk is cheap per
+    distinct title (~360k) but every caller here works with an already title-deduplicated
+    frame (post-groupby) - so this returns a lookup dict for a cheap .map(), rather than a
+    column pre-populated on the full ~1M-row dataset, which would cost extra to broadcast
+    out to every row for no consumer that actually needs it at that grain.
+    """
+    sql = "SELECT DISTINCT title FROM jobs WHERE title IS NOT NULL"
+    titles = _cached_query(db_path, db_mod_time, sql)['title']
+    return dict(zip(titles, derive_ssoc_job_labels_bulk(titles)))
+
+
 @st.cache_data(show_spinner='Loading seeker dataset…')
 def _cached_seeker_dataset(db_path, db_mod_time, industry=None, experience_level=None):
     seeker_df = _cached_raw_seeker_dataset(db_path, db_mod_time)
@@ -79,6 +93,9 @@ def _cached_seeker_dataset(db_path, db_mod_time, industry=None, experience_level
     if experience_level:
         seeker_df = seeker_df[seeker_df['experience_level'] == experience_level]
     return seeker_df
+
+
+MIN_BENCHMARK_SAMPLE = 200  # smallest job_label total we will quote a salary benchmark for
 
 
 @st.cache_data(show_spinner='Loading seeker metrics…')
@@ -98,6 +115,8 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
     }
 
     if not seeker_df.empty:
+        # top_roles only ever needs job_label for the 10 rows it ends up displaying, so the
+        # map is applied after the head(10) truncation rather than on the full title grouping.
         metrics['top_roles'] = (
             seeker_df
             .groupby('title', observed=True, as_index=False)
@@ -110,22 +129,48 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
             .sort_values('opportunities', ascending=False)
             .head(10)
         )
+        label_map = _cached_job_label_map(db_path, db_mod_time)
+        metrics['top_roles']['job_label'] = metrics['top_roles']['title'].map(label_map)
 
-        metrics['salary_benchmarks'] = (
-            seeker_df
-            .groupby(['title', 'experience_level'], observed=True, as_index=False)
+        grouped = seeker_df.groupby(['title', 'experience_level'], observed=True)
+        salary_benchmarks = grouped.agg(
+            median_entry=('salary_min', 'mean'),
+            median_max=('salary_max', 'mean'),
+            p90=('salary_max', 'max'),
+            count_samples=('title', 'size')
+        )
+        # groupby.quantile() is vectorized; a lambda inside .agg() calls Python
+        # per group and is unusably slow at title-level cardinality (~380k groups).
+        salary_benchmarks['p25'] = grouped['market_salary'].quantile(.25).round(0)
+        salary_benchmarks = salary_benchmarks.reset_index()
+        salary_benchmarks['job_label'] = salary_benchmarks['title'].map(label_map)
+        salary_benchmarks = (
+            salary_benchmarks
+            .groupby(['job_label', 'experience_level'], observed=True, as_index=False)
             .agg(
-                p25=('market_salary', lambda s: round(s.quantile(.25), 0)),
-                median_entry=('salary_min', 'mean'),
-                median_max=('salary_max', 'mean'),
-                p90=('salary_max', 'max'),
-                count_samples=('title', 'size')
+                p25=('p25', 'mean'),
+                median_entry=('median_entry', 'mean'),
+                median_max=('median_max', 'mean'),
+                p90=('p90', 'max'),
+                count_samples=('count_samples', 'sum')
             )
             .sort_values('median_max', ascending=False)
         )
+        valid_labels = (
+            salary_benchmarks
+            .groupby('job_label')['count_samples']
+            .transform('sum')
+            >= MIN_BENCHMARK_SAMPLE
+        )
+        metrics['salary_benchmarks'] = salary_benchmarks[valid_labels]
 
-        skills_df = seeker_df[['skills', 'salary_min', 'salary_max']].copy()
-        skills_df = skills_df.assign(skill=skills_df['skills'].fillna('').str.split(','))
+        # skills is the literal string "Not Specified" for ~97% of postings - drop those
+        # before the split/explode rather than after, so the expensive part only ever
+        # touches the rows that actually carry skill data.
+        skills_df = seeker_df[
+            seeker_df['skills'].notna() & (seeker_df['skills'] != 'Not Specified')
+        ][['skills', 'salary_min', 'salary_max']].copy()
+        skills_df = skills_df.assign(skill=skills_df['skills'].str.split(','))
         skills_df = skills_df.explode('skill').reset_index(drop=True)
         skills_df['skill'] = skills_df['skill'].astype('string').str.strip()
         skills_df = skills_df[skills_df['skill'].replace('', pd.NA).notna()]
@@ -280,7 +325,8 @@ def _fetch_competition_metrics(db_path, db_mod_time, industry=None, experience_l
         np.nan,
         title_metrics['postings'] / title_metrics['vacancies'],
     )
-    title_metrics['job_label'] = title_metrics['title'].apply(_cached_label_for_title)
+    label_map = _cached_job_label_map(db_path, db_mod_time)
+    title_metrics['job_label'] = title_metrics['title'].map(label_map)
     df = (
         title_metrics
         .groupby('job_label', observed=True, as_index=False)
@@ -298,11 +344,6 @@ def _fetch_competition_metrics(db_path, db_mod_time, industry=None, experience_l
     df = pd.concat([high, low], ignore_index=True)
     df = df.sort_values(['competition_type', 'competition_ratio', 'postings'], ascending=[False, False, False])
     return df
-
-
-@lru_cache(maxsize=128)
-def _cached_label_for_title(title: str):
-    return derive_ssoc_job_label(title, None, None)
 
 
 def fetch_competition_metrics(db, industry=None, experience_level=None, limit=10):
@@ -382,9 +423,6 @@ def render_seeker_view():
     )
 
     if not metrics['top_roles'].empty:
-        metrics['top_roles']['job_label'] = metrics['top_roles']['title'].apply(
-            _cached_label_for_title
-        )
         metrics['top_roles'] = (
             metrics['top_roles']
             .groupby('job_label', observed=True, as_index=False)
@@ -398,33 +436,11 @@ def render_seeker_view():
         metrics['top_roles']['avg_salary'] = metrics['top_roles']['avg_salary'].apply(format_currency_2dp)
 
     if not metrics['salary_benchmarks'].empty:
-        metrics['salary_benchmarks']['job_label'] = metrics['salary_benchmarks']['title'].apply(
-            _cached_label_for_title
-        )
-        metrics['salary_benchmarks'] = (
-            metrics['salary_benchmarks']
-            .groupby(['job_label', 'experience_level'], observed=True, as_index=False)
-            .agg(
-                experience_level=('experience_level', 'first'),
-                median_entry=('median_entry', 'mean'),
-                median_max=('median_max', 'mean'),
-                p90=('p90', 'max'),
-                count_samples=('count_samples', 'sum')
-            )
-            .sort_values('median_max', ascending=False)
-        )
         # Some pandas builds may not expose DataFrame.applymap; use a
         # column-wise mapping which is more portable across pandas versions.
-        for col in ['median_entry', 'median_max', 'p90']:
+        for col in ['p25', 'median_entry', 'median_max', 'p90']:
             if col in metrics['salary_benchmarks'].columns:
                 metrics['salary_benchmarks'][col] = metrics['salary_benchmarks'][col].map(format_currency_2dp)
-        valid_labels = (
-            metrics['salary_benchmarks']
-            .groupby('job_label')['count_samples']
-            .transform('sum')
-            >= 200
-        )
-        metrics['salary_benchmarks'] = metrics['salary_benchmarks'][valid_labels]
 
     # Opportunities overview
     if not metrics['opportunities'].empty:
