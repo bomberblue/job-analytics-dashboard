@@ -81,6 +81,9 @@ def _cached_seeker_dataset(db_path, db_mod_time, industry=None, experience_level
     return seeker_df
 
 
+MIN_BENCHMARK_SAMPLE = 200  # smallest job_label total we will quote a salary benchmark for
+
+
 @st.cache_data(show_spinner='Loading seeker metrics…')
 def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
     seeker_df = _cached_seeker_dataset(db_path, db_mod_time, sector, experience_level)
@@ -127,7 +130,6 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
             salary_benchmarks
             .groupby(['job_label', 'experience_level'], observed=True, as_index=False)
             .agg(
-                experience_level=('experience_level', 'first'),
                 p25=('p25', 'mean'),
                 median_entry=('median_entry', 'mean'),
                 median_max=('median_max', 'mean'),
@@ -140,7 +142,7 @@ def _cached_seeker_metrics(db_path, db_mod_time, experience_level, sector):
             salary_benchmarks
             .groupby('job_label')['count_samples']
             .transform('sum')
-            >= 200
+            >= MIN_BENCHMARK_SAMPLE
         )
         metrics['salary_benchmarks'] = salary_benchmarks[valid_labels]
 

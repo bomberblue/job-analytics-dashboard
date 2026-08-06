@@ -2,10 +2,9 @@
 Unit tests for the Job Seeker board.
 """
 import unittest
-from pathlib import Path
 
 from src.database.database_manager import DatabaseManager
-from src.dashboard.seeker_view import _cached_seeker_metrics
+from src.dashboard.seeker_view import _cached_seeker_metrics, _db_mod_time
 
 
 class TestCachedSeekerMetricsSalaryBenchmarks(unittest.TestCase):
@@ -15,7 +14,7 @@ class TestCachedSeekerMetricsSalaryBenchmarks(unittest.TestCase):
 
     def setUp(self):
         self.db = DatabaseManager()
-        self.db_mod_time = Path(self.db.db_path).stat().st_mtime
+        self.db_mod_time = _db_mod_time(self.db)
 
     def test_p25_present_and_populated(self):
         metrics = _cached_seeker_metrics(self.db.db_path, self.db_mod_time, None, None)
