@@ -50,11 +50,11 @@ This report covers Sections 1–4 of the assignment brief. Supporting artefacts:
 
   The notebooks **import** `src/pipeline/` rather than reimplementing it, so notebook and production pipeline cannot drift apart.
 
-- **Cleaning — 3,998 rows removed (0.38%), 0 cells imputed.** Removals are structurally-empty ghost rows plus `RANDOM_JOB_` synthetic test rows. Nothing was imputed: salary is the quantity being measured, so filling it would break the assumption every downstream figure rests on. Salary coverage after cleaning is **99.0%**, and that figure is quoted alongside every salary number in the app.
+- **Cleaning — 3,998 rows removed (0.38%), 0 cells imputed.** Removals are structurally-empty ghost rows plus `RANDOM_JOB_` synthetic test rows. Nothing was imputed: salary is the quantity being measured, so filling it would break the assumption every downstream figure rests on. Salary coverage after cleaning is **99.0%**.
 
-- **Cleaning — bad salaries get a reason code, not a repair.** A `salary_flag` column takes `undisclosed · outlier · low_stipend · ok`. The 1,804 postings at `$1–$1` are a required-field placeholder with no real value to preserve at any resolution, so they are nulled (9,577 rows total, under 1%). The 269 postings at `$150,000/month` might be a real C-suite role or a missing decimal — that depends on the question being asked, so they are **flagged and kept**, and any analysis excludes them in one line.
+- **Cleaning — bad salaries get a reason code, not a repair.** A `salary_flag` column takes `undisclosed · outlier · low_stipend · ok`. The 1,804 postings at `$1–$1` are a required-field placeholder with no real value to preserve at any resolution, so they are nulled (9,577 rows total, under 1%). The 269 postings above `$100,000/month` might be a real C-suite role or a missing decimal — that depends on the question being asked, so they are **flagged and kept**, and any analysis excludes them in one line.
 
-- **Cleaning — four conversions that were not housekeeping.** (i) Dates are parsed, formatted back, and compared; a single mismatch refuses the conversion, because a wrong date is a wrong cohort. (ii) 184 titles carried **zero-width characters** — invisible, and `\s` does not match them, so one title silently becomes two. (iii) Same-day duplicate groups: 16,990 of 21,344 had *different view counts*, i.e. they are real distinct listings — so they are flagged, not dropped. (iv) `categories` is a JSON array of 43 industries; 37% of postings carry more than one, so keeping only the first would have discarded **723,000 category assignments** — it is exploded into a bridge table instead. The chain matters: case-folding titles is what makes the duplicate key work, and duplicates inflate how crowded a sector looks.
+- **Cleaning — four conversions that were not housekeeping.** (i) Dates are parsed, formatted back, and compared; a single mismatch refuses the conversion, because a wrong date is a wrong cohort. (ii) 184 rows carried **zero-width characters** in their title — invisible, and `\s` does not match them, so one title silently becomes two. (iii) Same-day duplicate groups: 16,990 of 21,344 had *different view counts*, i.e. they are real distinct listings — so they are flagged, not dropped. (iv) `categories` is a JSON array of 43 industries; 37% of postings carry more than one, so keeping only the first would have discarded **723,000 category assignments** — it is exploded into a bridge table instead. The chain matters: case-folding titles is what makes the duplicate key work, and duplicates inflate how crowded a sector looks.
 
 - **Feature engineering** — `src/pipeline/feature_enrichment.py` derives experience bands (Entry ≤1yr / Mid ≤4yr / Senior), salary bands (Entry <$3k / Mid $3–5k / Senior $5–8k / Executive >$8k), SSOC-style standardised job labels (the ~365k raw titles are too fragmented to group directly, so reporting is by 43 industries × 9 position levels), and the finance feature tables. Two features were **built and then deleted**: `skill_count` matched keywords against job *titles* — there is no description field, and a headline is not where skills live; and `competitiveness_score` barely correlated with applications, views or vacancies. A score that does not track its own subject is worse than no score.
 
@@ -72,7 +72,7 @@ This report covers Sections 1–4 of the assignment brief. Supporting artefacts:
 
 - **Hirer board — five tabs, driven by one persistent vacancy config.** A sidebar panel ("The vacancy you're posting") holds sector, position level, experience level, planned salary, and minimum years. The tabs are **Salary benchmark · Experience norms · Applicant response · Reach vs conversion · Repost risk**. Each tab renders *only* the controls it actually reads (`TAB_CONTROLS` in `hirer_view.py`) — five always-visible controls of which two do nothing reads as a broken chart — and hidden controls persist their values across tab switches.
 
-- **Market Overview board — four tabs in narrative order:** Market Pulse (headline metrics, industry momentum, salary trend, wage-growth decomposition), Market Composition (top categories, employment-type mix, seasonality), Market Structure (concentration among top companies), and Cross-View Insight (does pay actually track how hard a role is to fill?).
+- **Market Overview board — four tabs in narrative order:** Market Pulse (headline metrics, industry momentum, salary trend, wage-growth decomposition), Market Composition (top categories, employment-type mix, seasonality), Market Structure (concentration among top companies), and Cross-View Insight — two checks: does pay actually track how hard a role is to fill, and where do repost risk and vacancy budget exposure concentrate together by industry.
 
 - **Seeker board** — pay fairness and market position against a salary percentile, seniority ladder, pay-range width by industry and level, competition per opening, and best-opportunity ranking.
 
@@ -84,7 +84,7 @@ This report covers Sections 1–4 of the assignment brief. Supporting artefacts:
 
 - **Business alignment — headline finding, and why the board withholds a true number.** Market-wide, reposting falls from **18.7% to 16.2%** as the experience ask rises from under 3 years to 3+. That number is true, and it gives exactly the wrong advice: postings asking 3+ years are simply the better-paid ones ($5,400 vs $3,000 median). Holding pay fixed reverses it at the bottom:
 
-  | Pay band | Repost rate, <3 yrs → 3+ yrs | Change |
+  | Pay band | Repost rate, < 3 yrs → 3+ yrs | Change |
   |---|---|---|
   | Entry < $3k | 19.4% → **24.6%** | **+5.3 pts** |
   | Mid $3–5k | 18.4% → 18.1% | −0.3 |
@@ -148,4 +148,4 @@ python -m src.pipeline.pipeline   # clean → enrich → load into data/processe
 streamlit run src/dashboard/app.py
 ```
 
-Note: `ARCHITECTURE.md`, `PROJECT_STRUCTURE.md` and the `RAW_LAYER_*.md` files predate the current state of the project and are only partly accurate. Where they disagree with the code or the database, trust the code.
+Note: `ARCHITECTURE.md`, `GETTING_STARTED.md` and `PROJECT_STRUCTURE.md` are early scaffolding docs kept for reference. Where they disagree with the code or the database, trust the code.

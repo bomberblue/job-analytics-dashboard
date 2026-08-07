@@ -13,8 +13,9 @@ app - there's no separate page per role, just a single Streamlit app that
 switches which board renders.
 
 - **Market Overview** - market-wide pay trends, wage growth decomposition,
-  industry/position composition, market concentration, and a cross-view check
-  on whether pay actually tracks how hard a role is to fill.
+  industry/position composition, market concentration, and two cross-view
+  checks: whether pay actually tracks how hard a role is to fill, and where
+  repost risk and vacancy budget exposure concentrate together by industry.
 - **Hirer** - benchmark a planned salary against comparable postings, check
   experience norms for a sector/level, and diagnose why a vacancy might be
   under-filling or getting reposted.
@@ -46,6 +47,15 @@ tests/              pytest suite for the pipeline and Market Overview's
 `ARCHITECTURE.md` and a few other top-level docs predate the current state of
 this project and are only partly accurate - if something there disagrees with
 the code or the database, trust the code.
+
+## Other deliverables
+
+- **Written report** (business case, data handling, dashboard, presentation
+  notes) - `docs/report.md`
+- **Presentation deck** - `docs/job-analytics-hirer-deck.pptx`
+- **Data cleaning notes** - `docs/data-cleaning-decisions.md` (why) and
+  `docs/data-cleaning-report-generated.md` (what the pipeline did, generated
+  from the live run)
 
 ## Setup
 
@@ -90,7 +100,7 @@ instead of requiring a local pipeline run.
 python -m pytest tests/
 ```
 
-Covers the pipeline (cleaning, enrichment, schema) and Market Overview's query
-layer. Verify dashboard changes with `streamlit.testing.v1.AppTest` rather than
-eyeballing - the boards switch via the nav buttons in `app.py`, not a sidebar
-or URL route.
+Covers the pipeline (cleaning, enrichment, schema) and the Market Overview and
+Seeker query layers. Verify dashboard changes with `streamlit.testing.v1.AppTest`
+rather than eyeballing - the boards switch via the nav buttons in `app.py`, not
+a sidebar or URL route.

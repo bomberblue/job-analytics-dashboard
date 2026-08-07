@@ -1,9 +1,8 @@
 # 🚀 Job Analytics Dashboard - Project Structure Complete
 
-> **Staleness note:** the Finance Business Partner sections below reflect
-> the current code. Hirer/Seeker details elsewhere in this doc may lag
-> what's actually in `src/dashboard/` — trust the code over this doc where
-> they disagree.
+> **Staleness note:** this file is checked against the code as of this
+> update. It can still drift as the code changes — where this disagrees
+> with `src/`, trust the code.
 
 Your team project is now fully scaffolded and ready for development!
 
@@ -16,17 +15,18 @@ Your team project is now fully scaffolded and ready for development!
 - **pipeline.py** — Orchestrates ETL: Extract CSV → Clean → Engineer → Load to DuckDB → Build finance feature tables (Stage 4)
 
 ### 2. **Database Layer** (`src/database/`)
-- **schema.py** — DuckDB table definitions (jobs, salary_benchmarks, market_trends, skills_demand)
-- **database_manager.py** — Query builder with `.get_seeker_view()`, `.get_hiring_trends()`, `.get_sector_list()`
+- **schema.py** — DuckDB table definitions. Only `jobs` and the `finance_*` tables are ever populated; `salary_benchmarks`, `market_trends`, `skills_demand`, `role_statistics` are declared and created empty but nothing writes to them
+- **database_manager.py** — `.query()` (used by Market Overview, Hirer, and Finance) and `.get_sector_list()` (used by Market Overview and Hirer). Seeker bypasses `DatabaseManager` entirely, opening its own cached raw `duckdb.connect()` instead. `.get_seeker_view()` and `.get_hiring_trends()` still exist but aren't called by any board
 
 ### 3. **Streamlit Dashboard** (`src/dashboard/`)
-- **app.py** — Main dashboard with role-based views (Hirer, Seeker, Finance Partner), switched from a nav-chip row
+- **app.py** — Main dashboard with four boards (Market Overview, Hirer, Seeker, Finance Partner), switched from a nav-chip row
+- **market_overview.py** — Market-wide board: pay trends, wage growth decomposition, industry/position composition, market concentration, two cross-view checks
 - **finance_view.py** — Finance Business Partner board: recruitment mix/trend, contract-vs-permanent conversion economics, vacancy budget exposure concentration
 - **utils.py** — Dashboard utilities (formatting, caching, helpers)
 
 ### 4. **Configuration** (`config/`)
 - **settings.py** — Centralized business logic: experience levels, sectors, salary thresholds
-- **finance_scenario.py** / **finance_scenario.json** — Finance cost assumptions (employer burden rates, agency premium, cost-neutral tolerance). Read live by the dashboard on every render — editing the JSON changes every cost figure on the Finance board immediately, no pipeline rerun needed (except for the two sample-size/outlier-capping parameters, which do need `python -m src.pipeline.pipeline`)
+- **finance_scenario.py** / **finance_scenario.json** — Finance cost assumptions (employer burden rates, agency premium, cost-neutral tolerance, `min_cohort_postings`). Read live by the dashboard on every render — editing the JSON changes every cost figure and `min_cohort_postings`-gated segment on the Finance board immediately. The one exception is `salary_planning_cap_quantile`, read only by the pipeline, which does need `python -m src.pipeline.pipeline` to take effect
 
 ### 5. **Data Directories** (`data/`)
 - **raw/** — Place your SGJobData.csv here
@@ -35,7 +35,6 @@ Your team project is now fully scaffolded and ready for development!
 ### 6. **Supporting Files**
 - **requirements.txt** — Python packages (pandas, duckdb, streamlit, etc.)
 - **environment.yml** — Conda environment definition
-- **TEAM_GUIDE.md** — Instructions for 5-person team collaboration
 - **PROJECT_STRUCTURE.md** — Detailed architecture documentation
 - **tests/** — Unit test template (test_pipeline.py)
 - **notebooks/** — EDA exploration template
@@ -44,23 +43,33 @@ Your team project is now fully scaffolded and ready for development!
 
 ## 🎯 Business Logic
 
+### Market Overview 📈
+Helps anyone answer "what is the market doing" before drilling into a specific decision:
+- **Market Pulse:** headline metrics, industry momentum, salary trend, wage-growth decomposition
+- **Market Composition:** top categories, employment-type mix, seasonality
+- **Market Structure:** concentration among top companies
+- **Cross-View Insight:** does pay actually track how hard a role is to fill, and where do repost risk and vacancy budget exposure concentrate together by industry
+
+**Queries:** `src/dashboard/market_overview.py` — one `fetch_*` function per chart, each via `db.query()`, plus `db.get_sector_list()`
+
 ### Hirer View 👔
-Helps recruitment teams understand **market demand**:
-- **Market Overview:** Total postings, active companies, avg salary
-- **Top Roles:** Which positions have most openings?
-- **Skills in Demand:** What technical skills are most sought?
-- **Hiring Trends:** How is hiring volume changing over time?
+Helps a hirer decide whether the vacancy they're about to post is priced and configured sensibly, five tabs driven by one persistent vacancy config (sector, position level, experience level, planned salary, minimum years):
+- **Salary benchmark:** what comparable postings pay
+- **Experience norms:** how much experience postings at this level typically ask for
+- **Applicant response:** applications and under-fill risk by pay band
+- **Reach vs conversion:** whether a low-paying posting's problem is views or conversion
+- **Repost risk:** which pay-band/experience-ask combinations get reposted most
 
 **Queries:** `src/dashboard/hirer_data_loader.py` (deduplicated market cohorts), plus `db.get_sector_list()`
 
 ### Seeker View 🔍
-Helps job seekers understand **market opportunities**:
-- **Opportunities:** How many jobs match your profile?
-- **Top Roles:** Which roles are actively hiring?
-- **Salary Benchmarks:** What are realistic salary ranges?
-- **Competitive Skills:** Which skills command salary premiums?
+Helps a candidate judge one specific offer against the market:
+- **Pay fairness & market position:** salary percentile for their pay against comparable postings
+- **Pay by experience / seniority ladder:** how pay moves with years of experience
+- **Competition per opening:** how contested a role or industry is
+- **Best opportunities & salary benchmarks:** where pay is strong and competition is low
 
-**Queries:** `db.get_seeker_view(experience_level=None, sector=None)`
+**Queries:** `src/dashboard/seeker_view.py` — its own cached functions against a preloaded deduplicated-market DataFrame, not `database_manager.py`'s `get_seeker_view()` (unused)
 
 ### Finance Business Partner View 💼
 Helps FP&A translate workforce-mix and hiring-speed decisions into dollars:
@@ -77,86 +86,56 @@ Helps FP&A translate workforce-mix and hiring-speed decisions into dollars:
 ```
 SGJobData.csv (raw)
     ↓
-[data_cleaning.py]
+[Stage 1: insert_raw_jobs()]
+    • Loads the CSV completely unmodified into raw_jobs_flat (audit trail)
+    ↓
+[Stage 2a: data_cleaning.py]
     • Drop ghost rows and synthetic test rows
     • Null out placeholder salaries, flag statistical outliers
     • Normalize title/company text, strip zero-width characters
     • Flag same-day duplicate postings (doesn't drop them)
     ↓
-[feature_enrichment.py]
+[Stage 2b: feature_enrichment.py]
     • Rename columns to match the jobs table schema
-    • Standardize experience levels (junior → Entry Level)
-    • Extract skills (Python, SQL, AWS, etc.)
+    • Standardize experience levels
+    • Extract skills (title-keyword matches only -- no description field exists)
     • Calculate salary midpoints & bands
     ↓
-[finance_feature_pipeline.py]
+[Stage 3: insert_jobs()]
+    • Loads the cleaned, enriched frame into the jobs table
+    ↓
+[Stage 4: finance_feature_pipeline.py]
     • Classify employment_cohort (Permanent / Contract / Other)
     • Price loaded monthly cost per head (salary × burden & agency premium rates)
     • Compute vacancy budget exposure and contract-vs-permanent conversion economics
     ↓
 [DuckDB]
-    jobs (main table)
-    ├─ salary_benchmarks (P25, P50, P75, P90)
-    ├─ market_trends (historical by date/sector/role)
-    ├─ skills_demand (skill popularity & salary impact)
-    ├─ role_statistics (aggregated metrics)
-    └─ finance_* (scenario_params, job_features, industry_budget_risk,
-                  permanent_contract_conversion_economics)
-```
+    raw_jobs_flat (unmodified source rows, for lineage)
+    jobs (cleaned + enriched, what every board reads)
+    finance_* (scenario_params, job_features, industry_budget_risk,
+               permanent_contract_conversion_economics)
 
----
-
-## 💻 Quick Start for Team
-
-### Person 1: Environment Setup
-```bash
-cd /path/to/job-analytics-dashboard
-conda env create -f environment.yml
-conda activate job-analytics
-```
-
-### Person 2: Data Preparation
-```bash
-mkdir -p data/raw
-cp ~/path/to/SGJobData.csv data/raw/
-```
-
-### Person 3: Run Pipeline
-```bash
-python src/pipeline/pipeline.py
-# Run with smaller dataset first: nrows=50000
-```
-
-### Person 4: Verify Database
-```bash
-# Launch Jupyter or Python shell
-from src.database.database_manager import DatabaseManager
-db = DatabaseManager()
-jobs = db.query("SELECT COUNT(*) FROM jobs")
-print(jobs)  # Should show row count
-```
-
-### Person 5: Launch Dashboard
-```bash
-streamlit run src/dashboard/app.py
-# Opens http://localhost:8501
+    (role_statistics, salary_benchmarks, market_trends, skills_demand are
+     also declared in schema.py, but nothing in the pipeline writes to them)
 ```
 
 ---
 
 ## 📊 Dashboard Features
 
+### Market Overview Dashboard
+- **Filters:** Sector, position level
+- **Tabs:** Market Pulse · Market Composition · Market Structure · Cross-View Insight
+- **Data:** All tabs re-run their `fetch_*` queries on every filter change
+
 ### Hirer Dashboard
-- **Filters:** Sector selection dropdown
-- **Metrics:** 4 top-level KPIs (postings, companies, roles, salary)
-- **Charts:** Top 3 roles summary, skills demand bar chart, hiring trend line
-- **Data:** All queryable by sector
+- **Filters:** Sector, position level, experience level, planned salary, minimum years — shown per-tab, only the ones that tab actually reads (`TAB_CONTROLS` in `hirer_view.py`)
+- **Tabs:** Salary benchmark · Experience norms · Applicant response · Reach vs conversion · Repost risk
+- **Data:** Benchmarked against a deduplicated market cohort (`hirer_data_loader.py`)
 
 ### Seeker Dashboard
-- **Filters:** Experience level + sector multi-select
-- **Metrics:** 4 opportunity KPIs
-- **Tables:** Top opportunities, salary benchmarks
-- **Charts:** High-value skills with salary premium
+- **Filters:** Industry, experience level, your salary
+- **Sections:** Pay fairness & market position, pay by years of experience, seniority ladder, pay-range width by industry/level, competition per opening, best opportunities, salary benchmarks, high-value skills
 
 ### Finance Partner Dashboard
 - **Filters:** Year, Sector, Sub-sector, optional skill/keyword focus
@@ -180,31 +159,46 @@ streamlit run src/dashboard/app.py
 
 ## 📈 Key Metrics Architecture
 
-### For Hirers (Recruitment Focus)
+Hirer has no `metrics[...]` dict, just standalone functions. Seeker has both:
+five standalone functions for its first five sections, plus one `metrics`
+dict (from `_cached_seeker_metrics()`) for the last three.
+
+### For Hirers — `src/dashboard/hirer_data_loader.py`
 ```python
-metrics['market_overview']      # 4 KPIs
-metrics['top_roles']            # Top 10 roles by posting count
-metrics['skills_in_demand']     # Top 15 skills
-metrics['hiring_trends']        # Last 30 days trend
+salary_lookup(sector, position_level, experience_level, yrs_bucket)  # benchmark for this config
+config_norms(sector)          # experience asked, by position level
+response_by_pay_band(sector)  # applications + under-fill risk, by pay band
+funnel_by_pay_band(sector)    # views vs. conversion, by pay band
+repost_matrix(sector)         # repost rate by pay band x years required
+repost_contrast(sector)       # repost rate below vs. at/above 3 years required
 ```
 
-### For Seekers (Job Search Focus)
+### For Seekers — `src/dashboard/seeker_view.py`
 ```python
-metrics['opportunities']        # 4 opportunity KPIs
-metrics['top_roles']            # Top 10 by opportunities
-metrics['salary_benchmarks']    # P25, P50, P75, P90 by role
-metrics['competitive_skills']   # Top 15 by salary premium
+fetch_salary_percentile(db, industry, experience_level, salary)      # your pay's percentile
+fetch_pay_by_experience_years(db, industry)                          # pay vs. years of experience
+fetch_seniority_ladder(db, industry, experience_level)
+fetch_pay_range_by_industry_level(db, industry, experience_level)
+fetch_competition_metrics(db, industry, experience_level)             # applicants per opening
+
+# _cached_seeker_metrics() -- powers Best Opportunities, Salary Benchmarks,
+# High-Value Skills. Bypasses DatabaseManager: opens its own cached raw
+# duckdb.connect(), not db.query().
+metrics['opportunities']        # opportunity count
+metrics['top_roles']            # roles behind Best Opportunities
+metrics['salary_benchmarks']    # p25 (real quantile), median_entry/median_max (mean), p90 (max) -- by job label + experience level
+metrics['competitive_skills']   # High-Value Skills
 ```
 
 ### For Finance (FP&A Focus)
 ```python
 # finance_view.py queries finance_job_features directly (not via
 # database_manager.py) so loaded cost reflects the live scenario file.
-headline_metrics            # postings, total budget exposure, median exposure/opening, contract share
-recruitment_type_overview   # Permanent/Contract/Temp mix + median cost + budget exposure
-conversion_decision_summary # segments classified Savings / Cost premium / Cost neutral
-exposure_by_position_level  # total vacancy budget exposure ranked by position level
-slowest_expensive_segments  # watchlist: high posting-window days x high exposure
+_fetch_headline_metrics            # postings, total budget exposure, median exposure/opening, contract share
+_fetch_recruitment_type_overview   # Permanent/Contract/Temp mix + median cost + budget exposure
+_fetch_conversion_decision_summary # segments classified Savings / Cost premium / Cost neutral
+_fetch_exposure_by_position_level  # total vacancy budget exposure ranked by position level
+_fetch_slowest_expensive_segments  # watchlist: high posting-window days x high exposure
 ```
 
 ---
@@ -270,7 +264,6 @@ Upon completion, your team will have:
 ## 📞 Support
 
 - **Architecture question?** → See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
-- **Team coordination?** → See [TEAM_GUIDE.md](TEAM_GUIDE.md)
 - **Code example?** → Check `notebooks/exploration_template.py`
 - **Stuck on a bug?** → Check `tests/test_pipeline.py` for similar patterns
 
@@ -282,12 +275,13 @@ Before presenting:
 - [ ] Pipeline runs without errors
 - [ ] DuckDB contains cleaned data with features
 - [ ] Dashboard loads without errors
-- [ ] Hirer view shows all 4 metric sections
-- [ ] Seeker view shows all 4 metric sections
+- [ ] Market Overview shows all 4 tabs (Market Pulse, Market Composition, Market Structure, Cross-View Insight)
+- [ ] Hirer view shows all 5 tabs (Salary benchmark, Experience norms, Applicant response, Reach vs conversion, Repost risk)
+- [ ] Seeker view shows its pay-fairness, seniority, competition, and best-opportunities sections
 - [ ] Finance Partner view shows all 3 tabs (Recruitment Trend, Decision 1, Decision 2) and `finance_*` tables are populated
-- [ ] Filters work correctly (sector, experience level, and Finance's year/sector/sub-sector/keyword)
+- [ ] Filters work correctly (sector/position level, a vacancy config for Hirer, industry/experience/salary for Seeker, and Finance's year/sector/sub-sector/keyword)
 - [ ] Charts render properly
-- [ ] README and TEAM_GUIDE are up-to-date
+- [ ] README is up-to-date
 - [ ] Tests pass
 - [ ] Git history is clean (meaningful commits)
 
@@ -295,4 +289,4 @@ Before presenting:
 
 **🎉 Ready to build! Your data pipeline infrastructure is set up and ready for implementation.**
 
-Questions? Start with [TEAM_GUIDE.md](TEAM_GUIDE.md) or your instructor!
+Questions? Start with [README.md](README.md) or your instructor!
