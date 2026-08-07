@@ -1,5 +1,10 @@
 # 🚀 Job Analytics Dashboard - Project Structure Complete
 
+> **Staleness note:** the Finance Business Partner sections below reflect
+> the current code. Hirer/Seeker details elsewhere in this doc may lag
+> what's actually in `src/dashboard/` — trust the code over this doc where
+> they disagree.
+
 Your team project is now fully scaffolded and ready for development!
 
 ## 📋 What's Been Created
@@ -7,18 +12,21 @@ Your team project is now fully scaffolded and ready for development!
 ### 1. **Data Pipeline** (`src/pipeline/`)
 - **data_cleaning.py** — Removes ghost/synthetic rows, fixes salary sentinels, normalizes text, flags duplicates
 - **feature_enrichment.py** — Renames columns to the schema, standardizes experience levels, extracts skills, creates salary bands
-- **pipeline.py** — Orchestrates ETL: Extract CSV → Clean → Engineer → Load to DuckDB
+- **finance_feature_pipeline.py** — Builds Finance Business Partner workforce-cost features (loaded cost per head, vacancy budget exposure, contract-vs-permanent conversion economics) from the cleaned `jobs` table and writes the `finance_*` tables
+- **pipeline.py** — Orchestrates ETL: Extract CSV → Clean → Engineer → Load to DuckDB → Build finance feature tables (Stage 4)
 
 ### 2. **Database Layer** (`src/database/`)
 - **schema.py** — DuckDB table definitions (jobs, salary_benchmarks, market_trends, skills_demand)
 - **database_manager.py** — Query builder with `.get_seeker_view()`, `.get_hiring_trends()`, `.get_sector_list()`
 
 ### 3. **Streamlit Dashboard** (`src/dashboard/`)
-- **app.py** — Main dashboard with role-based views (Hirer vs. Seeker)
+- **app.py** — Main dashboard with role-based views (Hirer, Seeker, Finance Partner), switched from a nav-chip row
+- **finance_view.py** — Finance Business Partner board: recruitment mix/trend, contract-vs-permanent conversion economics, vacancy budget exposure concentration
 - **utils.py** — Dashboard utilities (formatting, caching, helpers)
 
 ### 4. **Configuration** (`config/`)
 - **settings.py** — Centralized business logic: experience levels, sectors, salary thresholds
+- **finance_scenario.py** / **finance_scenario.json** — Finance cost assumptions (employer burden rates, agency premium, cost-neutral tolerance). Read live by the dashboard on every render — editing the JSON changes every cost figure on the Finance board immediately, no pipeline rerun needed (except for the two sample-size/outlier-capping parameters, which do need `python -m src.pipeline.pipeline`)
 
 ### 5. **Data Directories** (`data/`)
 - **raw/** — Place your SGJobData.csv here
@@ -54,6 +62,14 @@ Helps job seekers understand **market opportunities**:
 
 **Queries:** `db.get_seeker_view(experience_level=None, sector=None)`
 
+### Finance Business Partner View 💼
+Helps FP&A translate workforce-mix and hiring-speed decisions into dollars:
+- **Recruitment Trend:** Permanent/Contract/Temp mix and how it's moving month over month
+- **Decision 1 — Contract Conversion:** which sector × sub-sector × position-level segments would save money, cost more, or be cost-neutral if converted between contract and permanent (requires ≥30 postings per cohort to be comparable)
+- **Decision 2 — Exposure Concentration:** where estimated vacancy budget exposure concentrates by position level, plus a watchlist of slow-to-fill, high-exposure segments
+
+**Queries:** `finance_view.py` queries `finance_job_features` directly with `db.query()` — it does **not** go through `database_manager.py`'s `get_*_view()` pattern, because loaded cost is re-priced live from `config/finance_scenario.json` on every render rather than read as-stored.
+
 ---
 
 ## 🔄 Data Pipeline Flow
@@ -73,12 +89,19 @@ SGJobData.csv (raw)
     • Extract skills (Python, SQL, AWS, etc.)
     • Calculate salary midpoints & bands
     ↓
+[finance_feature_pipeline.py]
+    • Classify employment_cohort (Permanent / Contract / Other)
+    • Price loaded monthly cost per head (salary × burden & agency premium rates)
+    • Compute vacancy budget exposure and contract-vs-permanent conversion economics
+    ↓
 [DuckDB]
     jobs (main table)
     ├─ salary_benchmarks (P25, P50, P75, P90)
     ├─ market_trends (historical by date/sector/role)
     ├─ skills_demand (skill popularity & salary impact)
-    └─ role_statistics (aggregated metrics)
+    ├─ role_statistics (aggregated metrics)
+    └─ finance_* (scenario_params, job_features, industry_budget_risk,
+                  permanent_contract_conversion_economics)
 ```
 
 ---
@@ -135,6 +158,12 @@ streamlit run src/dashboard/app.py
 - **Tables:** Top opportunities, salary benchmarks
 - **Charts:** High-value skills with salary premium
 
+### Finance Partner Dashboard
+- **Filters:** Year, Sector, Sub-sector, optional skill/keyword focus
+- **Metrics:** 4 headline KPIs — postings in finance model, estimated vacancy cost exposure, median exposure per opening, contract share of postings
+- **Tabs:** Recruitment Trend (mix + monthly trend chart) · Decision 1: Contract Conversion (savings/cost-premium/cost-neutral segments) · Decision 2: Exposure Concentration (bar chart by position level + slow-to-fill watchlist)
+- **Live-editable:** cost assumptions in `config/finance_scenario.json` change every dollar figure on next page interaction, no pipeline rerun required
+
 ---
 
 ## 🔧 Module Responsibilities
@@ -165,6 +194,17 @@ metrics['opportunities']        # 4 opportunity KPIs
 metrics['top_roles']            # Top 10 by opportunities
 metrics['salary_benchmarks']    # P25, P50, P75, P90 by role
 metrics['competitive_skills']   # Top 15 by salary premium
+```
+
+### For Finance (FP&A Focus)
+```python
+# finance_view.py queries finance_job_features directly (not via
+# database_manager.py) so loaded cost reflects the live scenario file.
+headline_metrics            # postings, total budget exposure, median exposure/opening, contract share
+recruitment_type_overview   # Permanent/Contract/Temp mix + median cost + budget exposure
+conversion_decision_summary # segments classified Savings / Cost premium / Cost neutral
+exposure_by_position_level  # total vacancy budget exposure ranked by position level
+slowest_expensive_segments  # watchlist: high posting-window days x high exposure
 ```
 
 ---
@@ -244,7 +284,8 @@ Before presenting:
 - [ ] Dashboard loads without errors
 - [ ] Hirer view shows all 4 metric sections
 - [ ] Seeker view shows all 4 metric sections
-- [ ] Filters work correctly (sector, experience level)
+- [ ] Finance Partner view shows all 3 tabs (Recruitment Trend, Decision 1, Decision 2) and `finance_*` tables are populated
+- [ ] Filters work correctly (sector, experience level, and Finance's year/sector/sub-sector/keyword)
 - [ ] Charts render properly
 - [ ] README and TEAM_GUIDE are up-to-date
 - [ ] Tests pass
