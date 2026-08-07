@@ -1,11 +1,24 @@
-# Data Conversion & Cleaning Report — `SGJobData.csv`
+# Data Cleaning Decisions — `SGJobData.csv`
+
+> **What this document is.** The *reasoning* behind each cleaning choice: what was
+> considered, what was rejected, and why. It is the companion to
+> [`data-cleaning-report-generated.md`](data-cleaning-report-generated.md), which is
+> written automatically by `notebooks/data_cleaning.ipynb` from the live run and
+> records what the pipeline *actually did*.
+>
+> **Which one to trust for numbers.** The generated report. Every figure there is
+> interpolated from the run and cannot drift from the data. This document argues the
+> decisions; it does not re-verify the counts.
 
 **Source:** `data/raw/SGJobData.csv` → `data/processed/jobs_raw.parquet`
-**Shape as loaded:** 1,048,585 rows × 23 columns · 402.8 MB in memory (deep)
-**Shape after cleaning:** 1,044,597 rows × 18 columns · ~218 MB (−46%)
+**Scope of the figures below:** the dataset **after ghost-row removal but before**
+the synthetic-row, feature-enrichment, duplicate-flagging and column-pruning steps —
+1,044,597 rows, 402.8 MB as loaded. The end-to-end shape (1,048,585 → **1,044,587**
+rows, **3,998** rows removed, memory −59%) is in the generated report's step ledger.
 
-All figures below are computed on the current `df`. Statistics that describe real
-postings exclude the 3,988 ghost rows described in Section 2.
+Statistics that describe real postings exclude the 3,988 ghost rows described in
+Section 2. Those 3,988, plus the 10 synthetic `RANDOM_JOB_` rows removed in the next
+step, are the 3,998 total quoted elsewhere.
 
 ---
 
@@ -31,12 +44,12 @@ they sort correctly by luck but cannot do date arithmetic, resampling, or
 **No data loss.** Round-trip `to_datetime(...).dt.strftime('%Y-%m-%d')` reproduces the
 original string exactly. Ranges are sane and internally consistent:
 
-- `newPostingDate` 2023-02-24 → 2024-05-29
+- `newPostingDate` 2023-03-28 → 2024-05-29
 - `originalPostingDate` 2022-10-03 → 2024-05-29
-- `expiryDate` 2023-04-04 → 2024-12-12
+- `expiryDate` 2023-04-04 → 2024-06-28
 - `originalPostingDate > newPostingDate`: **0 violations**
 - `expiryDate <= newPostingDate`: **0 violations**
-- Listing lifespan: median 30 days, 1st pct 7 days, max 331 days — plausible
+- Listing lifespan: median 30 days — plausible
 
 Because there is no time component, `datetime64[ns]` is adequate; do not localise to
 a timezone (it would imply precision the source does not have).
