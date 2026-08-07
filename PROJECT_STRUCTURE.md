@@ -1,6 +1,10 @@
 # Job Analytics Dashboard
 
-**A Singapore job market analytics platform with role-based dashboards for hirers and job seekers.**
+**A Singapore job market analytics platform with role-based dashboards for hirers, job seekers, and finance business partners.**
+
+> **Staleness note:** the file tree and Finance sections below reflect the
+> current code. Where other parts of this doc disagree with `src/`, trust
+> the code — see the top-level `README.md` for the up-to-date board list.
 
 ## 📋 Project Structure
 
@@ -11,17 +15,27 @@ job-analytics-dashboard/
 │   └── processed/           # DuckDB database files
 ├── src/
 │   ├── pipeline/           # ETL pipeline
-│   │   ├── data_cleaning.py      # Data cleaning logic
-│   │   ├── feature_enrichment.py # Feature engineering
-│   │   └── pipeline.py          # Pipeline orchestrator
+│   │   ├── data_cleaning.py           # Data cleaning logic
+│   │   ├── feature_enrichment.py      # Feature engineering
+│   │   ├── finance_feature_pipeline.py # Finance cost/budget-risk features
+│   │   └── pipeline.py               # Pipeline orchestrator (Stage 4 = finance)
 │   ├── database/           # Database layer
 │   │   ├── schema.py            # DuckDB schema definitions
 │   │   └── database_manager.py  # DB operations
 │   └── dashboard/          # Streamlit UI
-│       ├── app.py               # Main dashboard app
+│       ├── app.py               # Main dashboard app (nav-chip router)
+│       ├── hirer_view.py        # Hirer board
+│       ├── seeker_view.py       # Seeker board
+│       ├── market_overview.py   # Market Overview board
+│       ├── finance_view.py      # Finance Business Partner board
+│       ├── hirer_data_loader.py # Deduplicated market cohorts for Hirer
+│       ├── charts.py            # Shared chart helpers
+│       ├── theme.py             # Shared color/theme constants
 │       └── utils.py             # Dashboard utilities
 ├── config/
-│   └── settings.py         # Global configuration
+│   ├── settings.py              # Global configuration
+│   ├── finance_scenario.py      # Loads finance cost assumptions
+│   └── finance_scenario.json    # Editable: burden rates, agency premium, tolerance
 ├── notebooks/              # Jupyter notebooks for exploration
 ├── tests/                  # Unit tests
 ├── requirements.txt        # Python dependencies
@@ -115,6 +129,23 @@ Helps job seekers understand market opportunities and benchmark their value.
 
 ---
 
+### 💼 Finance Business Partner View
+Helps FP&A translate workforce-mix and hiring-speed decisions into dollars.
+
+**Metrics:**
+- Estimated vacancy cost exposure and median exposure per opening
+- Contract share of postings
+- Recruitment mix (Permanent/Contract/Temp) and its monthly trend
+- Contract-vs-permanent conversion economics by segment
+
+**Use Cases:**
+- Approve or challenge shifting budgeted headcount to contract staffing
+- Identify which sector × position-level segments would genuinely save money if converted (vs. cost premium or cost-neutral)
+- Find where vacancy budget exposure concentrates, and which slow-to-fill segments are also the most expensive
+- Tune cost assumptions (employer burden, agency premium) live via `config/finance_scenario.json` without rerunning the pipeline
+
+---
+
 ## 🔄 Data Pipeline
 
 ### Input
@@ -148,6 +179,10 @@ Helps job seekers understand market opportunities and benchmark their value.
   - `market_trends` - Historical trends by sector/role
   - `skills_demand` - Skill popularity and salary impact
   - `role_statistics` - Aggregated role metrics
+  - `finance_scenario_params` - cost assumptions used for this pipeline run
+  - `finance_job_features` - per-posting loaded cost, vacancy exposure, employment cohort
+  - `finance_industry_budget_risk` - offline snapshot, exposure ranked by sector
+  - `finance_permanent_contract_conversion_economics` - offline snapshot, Savings/Cost premium/Cost neutral by segment
 
 ---
 
@@ -201,8 +236,9 @@ Suggested role distribution:
 | **Data Engineer** | Maintain pipeline, DuckDB schemas, data quality |
 | **Analytics** | Feature engineering, metrics, analysis queries |
 | **Dashboard Dev** | Streamlit UI, visualizations, user experience |
-| **Product Manager** | Business logic, requirements, hirer/seeker prioritization |
+| **Product Manager** | Business logic, requirements, hirer/seeker/finance prioritization |
 | **DevOps / Docs** | Deployment, CI/CD, documentation, testing |
+| **Finance / FP&A Analyst** | `finance_feature_pipeline.py`, `finance_scenario.py/.json`, `finance_view.py` — loaded-cost model and conversion economics |
 
 ---
 
@@ -258,6 +294,9 @@ A: Yes! Extend `data_cleaning.py` to handle new CSV formats.
 
 **Q: How do I add new metrics?**  
 A: Add queries to `database_manager.py` and new dashboard sections to `app.py`.
+
+**Q: How do I change Finance's cost assumptions?**  
+A: Edit `config/finance_scenario.json` (employer burden rates, agency premium, cost-neutral tolerance) — the dashboard reads it live on every render, no pipeline rerun needed. The two exceptions are `salary_planning_cap_quantile` and `min_cohort_postings`, which govern what the pipeline keeps and do need `python -m src.pipeline.pipeline`.
 
 **Q: Is DuckDB production-ready?**  
 A: Yes, for read-heavy analytics. For multi-user writes, consider PostgreSQL.
