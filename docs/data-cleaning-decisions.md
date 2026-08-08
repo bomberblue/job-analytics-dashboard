@@ -154,7 +154,7 @@ treat `primary_category` as a convenience denormalisation.
 | `occupationId` | **100% NaN**, 0 distinct values. Empty column. |
 | `status_id` | Single value `0` on all rows. Zero variance. |
 | `salary_type` | Single value `Monthly` on all rows. Fold into docs/column name instead. |
-| `salary_na` | Single value `False` on all rows — and it is **wrong** (see §3.1). Drop and recompute. |
+| `salary_na` | Not present in the current `SGJobData.csv` at all (checked the header directly). Plan below is superseded — see §3.1. |
 
 **Justification.** A constant column cannot correlate with anything, cannot be filtered
 on meaningfully, and costs memory and cognitive load. `salary_type` being constant is
@@ -244,10 +244,14 @@ Distribution on real rows: median min $3,000, median max $4,500, but
 
 $1/month is not a wage; it is the placeholder a poster enters to satisfy a required
 field. Set these to `NaN` (requires nullable `Int32`, or convert salary columns to
-`float`) and flag them — **this is exactly what the broken `salary_na` column was
-supposed to capture.** Recompute:
+`float`) and flag them. **What shipped:** not the standalone `salary_na` boolean
+sketched below — `src/pipeline/data_cleaning.py`'s `fix_salaries()` folds this into
+one categorical `salary_flag` column instead (`'undisclosed' | 'outlier' | 'low_stipend'
+| 'ok'`), so a single column carries both "is this salary usable" and "why not,"
+rather than a separate boolean per reason:
 
 ```python
+# Sketch only -- superseded by the categorical salary_flag in the actual pipeline.
 salary_na = df['salary_maximum'] < 500        # or a threshold you defend
 ```
 
@@ -273,12 +277,20 @@ at $2,800–$25,330,000, `MCF-2023-0165468` "Clinic assistant" at $1,500–$10,0
 The pattern — sane minimum, absurd maximum — points at a missing decimal or a pasted
 annual/aggregate figure.
 
-Recommended treatment: **null out `salary_maximum` above a documented ceiling rather
-than winsorising.** Winsorising invents a value; nulling admits ignorance and lets
-`mean()` skip the row. A ceiling of $100,000/month keeps genuine C-suite listings
-(the 99.9th percentile is $35,000) while removing 279 rows of noise. Do **not** use the
-plain 1.5×IQR rule here — the 3×IQR upper fence is only $13,300 and would discard
-24,530 legitimate senior roles.
+Recommended treatment considered here: null out `salary_maximum` above a documented
+ceiling rather than winsorising. Winsorising invents a value; nulling admits ignorance
+and lets `mean()` skip the row. Do **not** use the plain 1.5×IQR rule here — the 3×IQR
+upper fence is only $13,300 and would discard 24,530 legitimate senior roles.
+
+**What actually shipped is different: flag, don't null.** `fix_salaries()` sets
+`salary_flag = 'outlier'` for these 279 rows and leaves `salary_maximum` untouched
+(`data_cleaning.py:118,128` — `high_max` is deliberately excluded from the rows that
+get nulled). The reasoning matches this section's C-suite-vs-noise judgement call, but
+the mechanism is "exclude via `WHERE salary_flag = 'ok'`" rather than "null and let
+`mean()` skip it" — a live C-suite salary of, say, $200,000 stays queryable for anyone
+who explicitly wants outliers, instead of being destroyed. A ceiling of $100,000/month
+keeps genuine C-suite listings (the 99.9th percentile is $35,000) while flagging 279
+rows of noise.
 
 **Fix C — recompute `average_salary` after A and B**, so it reflects the cleaned inputs.
 Currently it inherits every bad value (max $12,666,400).
@@ -399,7 +411,7 @@ NaN), add an explicit `salary_imputed` boolean so the imputation is never invisi
 
 | New column | Definition | Why |
 |---|---|---|
-| `salary_na` | `salary_maximum.isna()` after §3.1 | Replaces the broken all-`False` original |
+| `salary_flag` | `'undisclosed' \| 'outlier' \| 'low_stipend' \| 'ok'`, per §3.1 | What shipped instead of the `salary_na` boolean sketched above |
 | `average_salary` | `(min + max) / 2`, recomputed | Currently derived from uncleaned inputs |
 | `listing_days` | `expiryDate - newPostingDate` | Median 30, already validated non-negative |
 | `is_repost` | `repostCount > 0` | 42,730 rows; cleaner than the 0/1/2 code for filtering |
@@ -412,12 +424,13 @@ NaN), add an explicit `salary_imputed` boolean so the imputation is never invisi
 
 ```
 read_csv (1,048,585 × 23)
-  ├─ drop columns:  occupationId, status_id, salary_type, salary_na          → 19 cols
+  ├─ drop columns:  occupationId, status_id, salary_type      (salary_na is not
+  │                 a real column in this CSV -- see the note in §1.6)
   ├─ drop rows:     title.isna()                          −3,988             → 1,044,597
   ├─ drop rows:     jobPostId startswith 'RANDOM_JOB_'    −10                → 1,044,587
   ├─ parse dates:   3 cols → datetime64[ns]
-  ├─ fix salary:    max<500 → NaN (~7.1k) · max>100,000 → NaN (~271)
-  ├─ recompute:     average_salary, salary_na
+  ├─ fix salary:    max<500 → NaN (~7.1k, nulled) · max>100,000 → flagged 'outlier' (~271, NOT nulled)
+  ├─ recompute:     average_salary, salary_flag
   ├─ normalise:     title strip/collapse · company_normalised
   ├─ explode:       categories JSON → job_category bridge table (~1.9M rows)
   ├─ categorise:    employmentTypes, positionLevels, status_jobStatus, postedCompany_name
