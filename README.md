@@ -12,6 +12,8 @@ The dashboard has four boards, reachable from one nav row at the top of the
 app - there's no separate page per role, just a single Streamlit app that
 switches which board renders.
 
+**Streamlit dashboard**: https://job-analytics-dashboard-nar8phpsf2zgbwx5tuye8a.streamlit.app/
+
 - **Market Overview** - market-wide pay trends, wage growth decomposition,
   industry/position composition, market concentration, and two cross-view
   checks: whether pay actually tracks how hard a role is to fill, and where
